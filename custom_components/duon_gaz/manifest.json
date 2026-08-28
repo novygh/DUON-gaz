@@ -1,7 +1,7 @@
 {
   "domain": "duon_gaz",
   "name": "DUON Gaz",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "documentation": "https://www.home-assistant.io/",
   "config_flow": true,
   "single_config_entry": true,
