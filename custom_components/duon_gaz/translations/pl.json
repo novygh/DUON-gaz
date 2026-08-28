@@ -1,0 +1,27 @@
+{
+  "title": "DUON Gaz",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Konfiguracja DUON Gaz",
+        "description": "Wybierz liczniki energii gazowej z integracji Ariston i podaj ostatnie znane parametry rozliczeniowe.",
+        "data": {
+          "heating_entity": "Ariston – gaz CO [kWh]",
+          "dhw_entity": "Ariston – gaz CWU [kWh]",
+          "conversion_factor": "Współczynnik konwersji [kWh/m³]",
+          "gas_rate_net": "Cena gazu netto [PLN/kWh]",
+          "dist_var_rate_net": "Dystrybucja zmienna netto [PLN/kWh]",
+          "subscription_net": "Abonament netto [PLN/miesiąc]",
+          "dist_fixed_net": "Dystrybucja stała netto [PLN/miesiąc]",
+          "vat": "VAT (np. 0.23)"
+        }
+      }
+    },
+    "error": {
+      "same_entity": "Wybierz dwa różne sensory Aristona."
+    },
+    "abort": {
+      "single_instance_allowed": "DUON Gaz jest już skonfigurowany."
+    }
+  }
+}
