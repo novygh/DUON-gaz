@@ -8,9 +8,8 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfVolume
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.event import async_track_event
 
 from .runtime import DuonGazRuntime
 
@@ -44,11 +43,11 @@ class DuonBaseSensor(SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         @callback
-        def _refresh(_event) -> None:
+        def _refresh(_event: Event) -> None:
             self.async_write_ha_state()
 
-        self._unsub = async_track_event(
-            self.hass, f"{self.runtime.entry_id}_duon_gaz_update", _refresh
+        self._unsub = self.hass.bus.async_listen(
+            f"{self.runtime.entry_id}_duon_gaz_update", _refresh
         )
 
     async def async_will_remove_from_hass(self) -> None:
