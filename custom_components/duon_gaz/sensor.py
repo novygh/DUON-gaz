@@ -115,7 +115,8 @@ class DuonCostSensor(DuonBaseSensor):
 
     @property
     def native_value(self):
-        return round(self.runtime.estimated_cost_gross(), 2)
+        value = self.runtime.estimated_cost_gross()
+        return None if value is None else round(value, 2)
 
     @property
     def extra_state_attributes(self):
