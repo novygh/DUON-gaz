@@ -5,8 +5,10 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .const import DOMAIN
 from .runtime import DuonGazRuntime
 
 
@@ -33,6 +35,15 @@ class DuonPendingMeterNumber(NumberEntity):
 
     def __init__(self, runtime: DuonGazRuntime) -> None:
         self.runtime = runtime
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.runtime.entry_id)},
+            name="DUON Gaz",
+            manufacturer="DUON",
+            model="Rozliczenie gazu",
+        )
 
     @property
     def native_value(self) -> float | None:
