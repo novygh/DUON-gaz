@@ -204,7 +204,11 @@ class DuonGazRuntime:
             return None
         return meter * self.conversion_factor
 
-    def estimated_cost_gross(self) -> float:
+    def estimated_cost_gross(self) -> float | None:
+        """Return provisional cumulative gross cost after the first baseline reading."""
+        if self._last_reading() is None:
+            return None
+
         current_variable = (
             self.estimated_current_delta_m3()
             * self.conversion_factor
