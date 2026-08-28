@@ -9,8 +9,10 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfVolume
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .const import DOMAIN
 from .runtime import DuonGazRuntime
 
 
@@ -40,6 +42,15 @@ class DuonBaseSensor(SensorEntity):
     def __init__(self, runtime: DuonGazRuntime) -> None:
         self.runtime = runtime
         self._unsub = None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.runtime.entry_id)},
+            name="DUON Gaz",
+            manufacturer="DUON",
+            model="Rozliczenie gazu",
+        )
 
     async def async_added_to_hass(self) -> None:
         @callback
