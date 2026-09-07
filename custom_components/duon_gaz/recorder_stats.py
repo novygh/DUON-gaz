@@ -53,21 +53,31 @@ def _rows_by_timestamp(
     return rows
 
 
+def _coherent_snapshots(
+    result: dict[str, list[dict[str, Any]]],
+    heating_entity: str,
+    dhw_entity: str,
+) -> list[RecorderSnapshot]:
+    """Return all common CO/CWU points sorted chronologically."""
+    heating_rows = _rows_by_timestamp(result, heating_entity)
+    dhw_rows = _rows_by_timestamp(result, dhw_entity)
+    common = sorted(heating_rows.keys() & dhw_rows.keys())
+
+    snapshots: list[RecorderSnapshot] = []
+    for key in common:
+        timestamp, heating_sum = heating_rows[key]
+        _, dhw_sum = dhw_rows[key]
+        snapshots.append(RecorderSnapshot(timestamp, heating_sum, dhw_sum))
+    return snapshots
+
+
 def _coherent_snapshot(
     result: dict[str, list[dict[str, Any]]],
     heating_entity: str,
     dhw_entity: str,
 ) -> RecorderSnapshot | None:
-    heating_rows = _rows_by_timestamp(result, heating_entity)
-    dhw_rows = _rows_by_timestamp(result, dhw_entity)
-    common = heating_rows.keys() & dhw_rows.keys()
-    if not common:
-        return None
-
-    key = max(common)
-    timestamp, heating_sum = heating_rows[key]
-    _, dhw_sum = dhw_rows[key]
-    return RecorderSnapshot(timestamp, heating_sum, dhw_sum)
+    snapshots = _coherent_snapshots(result, heating_entity, dhw_entity)
+    return snapshots[-1] if snapshots else None
 
 
 def _nearest_coherent_snapshot(
@@ -77,17 +87,13 @@ def _nearest_coherent_snapshot(
     target: datetime,
 ) -> RecorderSnapshot | None:
     """Return the common CO/CWU hourly point closest to target."""
-    heating_rows = _rows_by_timestamp(result, heating_entity)
-    dhw_rows = _rows_by_timestamp(result, dhw_entity)
-    common = heating_rows.keys() & dhw_rows.keys()
-    if not common:
+    snapshots = _coherent_snapshots(result, heating_entity, dhw_entity)
+    if not snapshots:
         return None
-
-    target_ts = target.timestamp()
-    key = min(common, key=lambda item: abs(item - target_ts))
-    timestamp, heating_sum = heating_rows[key]
-    _, dhw_sum = dhw_rows[key]
-    return RecorderSnapshot(timestamp, heating_sum, dhw_sum)
+    return min(
+        snapshots,
+        key=lambda snapshot: abs((snapshot.timestamp - target).total_seconds()),
+    )
 
 
 async def async_get_recorder_snapshot(
@@ -182,3 +188,33 @@ async def async_get_recorder_snapshot_at(
     if abs(snapshot.timestamp - target) > window:
         raise ValueError("Najbliższy punkt Recorder jest zbyt daleko od odczytu z faktury.")
     return snapshot
+
+
+async def async_get_hourly_recorder_series(
+    hass: HomeAssistant,
+    heating_entity: str,
+    dhw_entity: str,
+    start: datetime,
+    end: datetime,
+) -> list[RecorderSnapshot]:
+    """Return coherent hourly cumulative CO/CWU statistics for reconstruction."""
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("Zakres historii Recorder musi mieć strefę czasową.")
+    if end <= start:
+        raise ValueError("Koniec zakresu historii musi być późniejszy niż początek.")
+
+    recorder = get_instance(hass)
+    result = await recorder.async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        end,
+        {heating_entity, dhw_entity},
+        "hour",
+        None,
+        {"sum"},
+    )
+    snapshots = _coherent_snapshots(result, heating_entity, dhw_entity)
+    if len(snapshots) < 2:
+        raise ValueError("Za mało wspólnych godzinowych statystyk Recorder dla CO i CWU.")
+    return snapshots
