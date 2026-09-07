@@ -1,0 +1,18 @@
+import_history:
+  name: Importuj historię
+  description: Importuje zweryfikowaną historię odczytów gazomierza z pliku JSON w /config.
+  fields:
+    path:
+      name: Plik
+      description: Ścieżka względna w /config.
+      required: false
+      default: duon_gaz_history_seed.json
+      selector:
+        text:
+    replace:
+      name: Zastąp istniejące odczyty
+      description: Pozwala zastąpić już zapisane odczyty po świadomym uruchomieniu usługi.
+      required: false
+      default: false
+      selector:
+        boolean:
