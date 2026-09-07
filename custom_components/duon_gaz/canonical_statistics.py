@@ -4,12 +4,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.models.statistics import (
     StatisticData,
     StatisticMetaData,
 )
-from homeassistant.components.recorder.statistics import async_add_external_statistics
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    get_last_statistics,
+)
 from homeassistant.const import UnitOfVolume
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import VolumeConverter
@@ -41,8 +45,47 @@ def _validate_monotonic(rows: list[StatisticData]) -> None:
         previous_sum = current_sum
 
 
+async def _async_verify_publication(runtime, expected_last_sum: float) -> dict[str, Any]:
+    """Wait for Recorder and verify the final imported canonical statistic row."""
+    recorder = get_instance(runtime.hass)
+    await recorder.async_block_till_done()
+
+    result = await recorder.async_add_executor_job(
+        get_last_statistics,
+        runtime.hass,
+        1,
+        CANONICAL_GAS_STATISTIC_ID,
+        False,
+        {"state", "sum"},
+    )
+    rows = result.get(CANONICAL_GAS_STATISTIC_ID, [])
+    if not rows:
+        raise CanonicalHistoryError(
+            "Recorder nie zwrócił opublikowanej historii kanonicznej."
+        )
+
+    row = rows[-1]
+    last_sum = row.get("sum")
+    if last_sum is None or not math.isfinite(float(last_sum)):
+        raise CanonicalHistoryError(
+            "Recorder zwrócił nieprawidłową końcową sumę historii kanonicznej."
+        )
+    if abs(float(last_sum) - expected_last_sum) > 1e-6:
+        raise CanonicalHistoryError(
+            "Końcowa suma historii w Recorder nie zgadza się z historią kanoniczną: "
+            f"{last_sum} != {expected_last_sum}."
+        )
+
+    return {
+        "verified_at": dt_util.utcnow().isoformat(),
+        "last_start": row.get("start"),
+        "last_state_m3": row.get("state"),
+        "last_sum_m3": float(last_sum),
+    }
+
+
 async def async_publish_canonical_statistics(runtime) -> dict[str, Any]:
-    """Rebuild and enqueue settled canonical gas statistics for Recorder.
+    """Rebuild, publish and verify settled canonical gas statistics for Recorder.
 
     Only intervals closed by meter anchors are published. The open interval after
     the newest anchor remains provisional and is deliberately excluded for now.
@@ -78,14 +121,9 @@ async def async_publish_canonical_statistics(runtime) -> dict[str, Any]:
         unit_of_measurement=UnitOfVolume.CUBIC_METERS,
     )
 
-    # Official Recorder API. This schedules an import task; it does not touch the
-    # database directly and repeated publication of the same hourly timestamps is
-    # handled by Recorder's statistics import path.
-    async_add_external_statistics(runtime.hass, metadata, statistics)
-
     requested_at = dt_util.utcnow().isoformat()
     publication = {
-        "status": "queued",
+        "status": "publishing",
         "requested_at": requested_at,
         "verified": False,
         "statistic_id": CANONICAL_GAS_STATISTIC_ID,
@@ -96,7 +134,25 @@ async def async_publish_canonical_statistics(runtime) -> dict[str, Any]:
         "last_sum_m3": statistics[-1]["sum"],
         "settled_through": summary["end"],
     }
+
+    # Official Recorder API. Repeated publication of the same hourly timestamps
+    # follows Recorder's normal statistics import path; no direct database access.
+    async_add_external_statistics(runtime.hass, metadata, statistics)
+    verification = await _async_verify_publication(
+        runtime,
+        float(statistics[-1]["sum"]),
+    )
+
+    publication.update(
+        {
+            "status": "verified",
+            "verified": True,
+            **verification,
+        }
+    )
+    summary["published_to_recorder"] = True
     summary["publication_requested_at"] = requested_at
+    summary["publication_verified_at"] = verification["verified_at"]
     summary["publication_statistic_id"] = CANONICAL_GAS_STATISTIC_ID
     summary["publication_row_count"] = len(statistics)
 
