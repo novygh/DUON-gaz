@@ -9,6 +9,8 @@ from homeassistant.core import HomeAssistant, HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .canonical_history import CanonicalHistoryError
+from .canonical_preview import async_rebuild_canonical_preview
 from .const import DOMAIN
 from .runtime import DuonGazRuntime
 
@@ -18,12 +20,26 @@ async def async_setup_entry(
     entry: ConfigEntry[DuonGazRuntime],
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    async_add_entities([DuonConfirmMeterButton(entry.runtime_data)])
+    async_add_entities(
+        [
+            DuonConfirmMeterButton(entry.runtime_data),
+            DuonCanonicalPreviewButton(entry.runtime_data),
+        ]
+    )
 
 
 def _submitted_meter_value(value: float) -> int:
     """Round to whole m3 for the DUON SMS, with .5 rounded up."""
     return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _device_info(runtime: DuonGazRuntime) -> DeviceInfo:
+    return DeviceInfo(
+        identifiers={(DOMAIN, runtime.entry_id)},
+        name="DUON Gaz",
+        manufacturer="DUON",
+        model="Rozliczenie gazu",
+    )
 
 
 class DuonConfirmMeterButton(ButtonEntity):
@@ -39,12 +55,7 @@ class DuonConfirmMeterButton(ButtonEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.runtime.entry_id)},
-            name="DUON Gaz",
-            manufacturer="DUON",
-            model="Rozliczenie gazu",
-        )
+        return _device_info(self.runtime)
 
     async def async_press(self) -> None:
         exact = self.runtime.pending_meter_m3
@@ -73,3 +84,25 @@ class DuonConfirmMeterButton(ButtonEntity):
             }
             await self.runtime.async_save()
             self.runtime.async_notify()
+
+
+class DuonCanonicalPreviewButton(ButtonEntity):
+    """Rebuild canonical history as a dry-run without publishing statistics."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Przelicz historię DUON (podgląd)"
+    _attr_unique_id = "duon_gaz_canonical_preview"
+    _attr_icon = "mdi:chart-timeline-variant-shimmer"
+
+    def __init__(self, runtime: DuonGazRuntime) -> None:
+        self.runtime = runtime
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return _device_info(self.runtime)
+
+    async def async_press(self) -> None:
+        try:
+            await async_rebuild_canonical_preview(self.runtime)
+        except (CanonicalHistoryError, ValueError) as err:
+            raise HomeAssistantError(str(err)) from err
