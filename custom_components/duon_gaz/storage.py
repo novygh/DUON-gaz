@@ -19,6 +19,8 @@ def default_store_data() -> dict[str, Any]:
     return {
         "schema_version": 2,
         "pending_meter_m3": None,
+        "pending_entered_by_user_id": None,
+        "pending_entered_at": None,
         "manual_readings": [],
         "calibration": {
             "co_m3_per_kwh": DEFAULT_CO_M3_PER_KWH,
