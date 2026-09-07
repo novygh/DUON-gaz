@@ -83,8 +83,8 @@ def _interval_audit(result) -> list[dict[str, Any]]:
 
 async def async_rebuild_canonical_preview(runtime) -> dict[str, Any]:
     """Build canonical history without publishing any Recorder statistics."""
-    anchors = _anchors_from_runtime(runtime)
-    if len(anchors) < 2:
+    all_anchors = _anchors_from_runtime(runtime)
+    if len(all_anchors) < 2:
         raise CanonicalHistoryError(
             "Do rekonstrukcji historii potrzebne są co najmniej dwa punkty gazomierza."
         )
@@ -94,14 +94,12 @@ async def async_rebuild_canonical_preview(runtime) -> dict[str, Any]:
     if heating_coeff is None or dhw_coeff is None:
         raise CanonicalHistoryError("Brak współczynników kalibracji CO/CWU.")
 
-    first = anchors[0].timestamp
-    last = anchors[-1].timestamp
     snapshots = await async_get_hourly_recorder_series(
         runtime.hass,
         runtime.heating_entity,
         runtime.dhw_entity,
-        first - timedelta(hours=2),
-        last + timedelta(hours=2),
+        all_anchors[0].timestamp - timedelta(hours=2),
+        all_anchors[-1].timestamp + timedelta(hours=2),
     )
     source_points = [
         SourcePoint(
@@ -111,6 +109,18 @@ async def async_rebuild_canonical_preview(runtime) -> dict[str, Any]:
         )
         for snapshot in snapshots
     ]
+
+    source_start = source_points[0].timestamp
+    source_end = source_points[-1].timestamp + timedelta(hours=1)
+    anchors = [
+        anchor
+        for anchor in all_anchors
+        if source_start <= anchor.timestamp <= source_end
+    ]
+    if len(anchors) < 2:
+        raise CanonicalHistoryError(
+            "Historia Recorder nie obejmuje co najmniej dwóch punktów gazomierza."
+        )
 
     result = build_canonical_history(
         source_points,
@@ -144,9 +154,13 @@ async def async_rebuild_canonical_preview(runtime) -> dict[str, Any]:
         "generated_at": dt_util.utcnow().isoformat(),
         "published_to_recorder": False,
         "source_point_count": len(source_points),
+        "anchor_count_total": len(all_anchors),
         "anchor_count": len(anchors),
+        "anchor_count_without_recorder": len(all_anchors) - len(anchors),
         "interval_count": len(result.intervals),
         "canonical_hour_count": len(result.hours),
+        "source_start": source_start.isoformat(),
+        "source_end": source_end.isoformat(),
         "start": anchors[0].timestamp.isoformat(),
         "end": anchors[-1].timestamp.isoformat(),
         "start_meter_m3": anchors[0].meter_m3,
