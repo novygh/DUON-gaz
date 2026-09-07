@@ -257,9 +257,17 @@ class DuonStatusSensor(DuonBaseSensor):
                         "published_to_recorder", False
                     ),
                     "historia_punkty_zrodlowe": preview.get("source_point_count"),
+                    "historia_kotwice_wszystkie": preview.get(
+                        "anchor_count_total"
+                    ),
                     "historia_kotwice": preview.get("anchor_count"),
+                    "historia_kotwice_bez_recorder": preview.get(
+                        "anchor_count_without_recorder"
+                    ),
                     "historia_przedzialy": preview.get("interval_count"),
                     "historia_godziny": preview.get("canonical_hour_count"),
+                    "historia_zrodlo_od": preview.get("source_start"),
+                    "historia_zrodlo_do": preview.get("source_end"),
                     "historia_od": preview.get("start"),
                     "historia_do": preview.get("end"),
                     "historia_suma_fizyczna_m3": preview.get("physical_total_m3"),
