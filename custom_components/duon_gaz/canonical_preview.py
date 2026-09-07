@@ -1,4 +1,4 @@
-"""Dry-run canonical history reconstruction for DUON Gaz."""
+"""Canonical history reconstruction and dry-run diagnostics for DUON Gaz."""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -8,6 +8,7 @@ from homeassistant.util import dt as dt_util
 
 from .canonical_history import (
     CanonicalHistoryError,
+    CanonicalHistoryResult,
     PhysicalAnchor,
     SourcePoint,
     build_canonical_history,
@@ -51,7 +52,7 @@ def _anchors_from_runtime(runtime) -> list[PhysicalAnchor]:
     return anchors
 
 
-def _interval_audit(result) -> list[dict[str, Any]]:
+def _interval_audit(result: CanonicalHistoryResult) -> list[dict[str, Any]]:
     ranked = sorted(
         result.intervals,
         key=lambda interval: (
@@ -81,8 +82,10 @@ def _interval_audit(result) -> list[dict[str, Any]]:
     ]
 
 
-async def async_rebuild_canonical_preview(runtime) -> dict[str, Any]:
-    """Build canonical history without publishing any Recorder statistics."""
+async def async_build_canonical_history(
+    runtime,
+) -> tuple[CanonicalHistoryResult, dict[str, Any]]:
+    """Build canonical history and its audit summary without persisting it."""
     all_anchors = _anchors_from_runtime(runtime)
     if len(all_anchors) < 2:
         raise CanonicalHistoryError(
@@ -109,6 +112,8 @@ async def async_rebuild_canonical_preview(runtime) -> dict[str, Any]:
         )
         for snapshot in snapshots
     ]
+    if len(source_points) < 2:
+        raise CanonicalHistoryError("Brak wystarczającej historii Recorder CO/CWU.")
 
     source_start = source_points[0].timestamp
     source_end = source_points[-1].timestamp + timedelta(hours=1)
@@ -184,7 +189,12 @@ async def async_rebuild_canonical_preview(runtime) -> dict[str, Any]:
         "scale_factor_max": None if not scales else round(max(scales), 9),
         "audit_intervals": _interval_audit(result),
     }
+    return result, summary
 
+
+async def async_rebuild_canonical_preview(runtime) -> dict[str, Any]:
+    """Build canonical history without publishing any Recorder statistics."""
+    _result, summary = await async_build_canonical_history(runtime)
     runtime.data["canonical_preview"] = summary
     await runtime.async_save()
     runtime.async_notify()
