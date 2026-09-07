@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import get_last_statistics
+from homeassistant.components.recorder.statistics import (
+    get_last_statistics,
+    statistics_during_period,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -50,6 +53,23 @@ def _rows_by_timestamp(
     return rows
 
 
+def _coherent_snapshot(
+    result: dict[str, list[dict[str, Any]]],
+    heating_entity: str,
+    dhw_entity: str,
+) -> RecorderSnapshot | None:
+    heating_rows = _rows_by_timestamp(result, heating_entity)
+    dhw_rows = _rows_by_timestamp(result, dhw_entity)
+    common = heating_rows.keys() & dhw_rows.keys()
+    if not common:
+        return None
+
+    key = max(common)
+    timestamp, heating_sum = heating_rows[key]
+    _, dhw_sum = dhw_rows[key]
+    return RecorderSnapshot(timestamp, heating_sum, dhw_sum)
+
+
 async def async_get_recorder_snapshot(
     hass: HomeAssistant,
     heating_entity: str,
@@ -57,8 +77,27 @@ async def async_get_recorder_snapshot(
     *,
     samples: int = 12,
 ) -> RecorderSnapshot:
-    """Return the newest timestamp for which both source statistics have a sum."""
+    """Return the newest coherent CO/CWU Recorder sum snapshot.
+
+    Prefer short-term 5-minute statistics so a manual physical meter reading is
+    anchored close to the actual confirmation time. Fall back to long-term
+    hourly statistics if short-term statistics are not available.
+    """
     recorder = get_instance(hass)
+    start = dt_util.utcnow() - timedelta(hours=2)
+
+    short_term = await recorder.async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        None,
+        {heating_entity, dhw_entity},
+        "5minute",
+        None,
+        {"sum"},
+    )
+    if snapshot := _coherent_snapshot(short_term, heating_entity, dhw_entity):
+        return snapshot
 
     heating_result = await recorder.async_add_executor_job(
         get_last_statistics,
@@ -77,13 +116,11 @@ async def async_get_recorder_snapshot(
         {"sum"},
     )
 
-    heating_rows = _rows_by_timestamp(heating_result, heating_entity)
-    dhw_rows = _rows_by_timestamp(dhw_result, dhw_entity)
-    common = heating_rows.keys() & dhw_rows.keys()
-    if not common:
-        raise ValueError("Brak wspólnego punktu statystyk Recorder dla CO i CWU.")
+    merged = {
+        heating_entity: heating_result.get(heating_entity, []),
+        dhw_entity: dhw_result.get(dhw_entity, []),
+    }
+    if snapshot := _coherent_snapshot(merged, heating_entity, dhw_entity):
+        return snapshot
 
-    key = max(common)
-    timestamp, heating_sum = heating_rows[key]
-    _, dhw_sum = dhw_rows[key]
-    return RecorderSnapshot(timestamp, heating_sum, dhw_sum)
+    raise ValueError("Brak wspólnego punktu statystyk Recorder dla CO i CWU.")
