@@ -5,6 +5,7 @@ import asyncio
 import calendar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 from statistics import median
 from typing import Any
@@ -23,6 +24,7 @@ from .const import (
     CONF_SUBSCRIPTION_NET,
     CONF_VAT,
 )
+from .invoice_parser import is_trusted_billing_reading, normalize_reading_type
 from .recorder_stats import (
     RecorderSnapshot,
     async_get_recorder_snapshot,
@@ -37,13 +39,6 @@ _MAX_CONFIRM_SNAPSHOT_AGE = timedelta(minutes=20)
 _MIN_CALIBRATION_COEFF = 0.04
 _MAX_CALIBRATION_COEFF = 0.20
 _MANUAL_INVOICE_SHADOW_WINDOW = timedelta(days=7)
-
-_TRUSTED_INVOICE_READING_TYPES = {
-    "actual",
-    "incasent",
-    "meter_reader",
-    "field_read",
-}
 
 
 def _as_float(value: Any) -> float | None:
@@ -63,6 +58,11 @@ def _as_datetime(value: Any) -> datetime | None:
         if parsed is not None and parsed.tzinfo is not None:
             return parsed
     return None
+
+
+def _submitted_meter_value(value: float) -> int:
+    """Return the whole-m3 value DUON receives, using half-up rounding."""
+    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _reading_recorder_values(
@@ -287,15 +287,43 @@ class DuonGazRuntime:
         readings = self._readings()
         return readings[-1] if readings else None
 
-    def _manual_anchor_near(self, timestamp: datetime) -> dict[str, Any] | None:
+    def _manual_anchor_near(
+        self,
+        timestamp: datetime,
+        meter_m3: float,
+        meter_precision_m3: float,
+    ) -> dict[str, Any] | None:
+        """Find a nearby manual reading that represents the same reported state."""
         nearest = None
         nearest_distance = None
+        invoice_meter = float(meter_m3)
+        invoice_precision = max(float(meter_precision_m3), 0.001)
+
         for reading in self._manual_readings():
             reading_time = _as_datetime(reading.get("timestamp"))
             if reading_time is None:
                 continue
             distance = abs(reading_time - timestamp)
             if distance > _MANUAL_INVOICE_SHADOW_WINDOW:
+                continue
+
+            manual_meter = _as_float(reading.get("meter_m3"))
+            if manual_meter is None:
+                continue
+
+            if invoice_precision >= 1.0:
+                submitted = _as_float(reading.get("meter_m3_submitted"))
+                if submitted is None:
+                    submitted = float(_submitted_meter_value(manual_meter))
+                same_meter = abs(submitted - invoice_meter) <= 0.001
+            else:
+                manual_precision = _as_float(reading.get("meter_precision_m3"))
+                if manual_precision is None:
+                    manual_precision = 1.0
+                tolerance = max(manual_precision, invoice_precision) / 2.0 + 1e-6
+                same_meter = abs(manual_meter - invoice_meter) <= tolerance
+
+            if not same_meter:
                 continue
             if nearest_distance is None or distance < nearest_distance:
                 nearest = reading
@@ -504,16 +532,15 @@ class DuonGazRuntime:
         meter_precision_m3: float = 1.0,
         exclude_from_calibration: bool = False,
     ) -> bool:
-        """Add a trusted physical meter anchor originating from an invoice.
+        """Add a trusted billing meter indication originating from an invoice.
 
-        Only actual field-reader readings are eligible. Estimated/billing-only
-        readings must stay in billing_periods and are never allowed to move the
-        physical meter baseline.
+        Estimated/billing-only readings must stay in billing_periods and are
+        never allowed to move the physical meter baseline.
         """
-        reading_type = reading_type.strip().lower()
-        if reading_type not in _TRUSTED_INVOICE_READING_TYPES:
+        reading_type = normalize_reading_type(reading_type)
+        if not is_trusted_billing_reading(reading_type):
             raise ValueError(
-                "Odczyt z faktury nie jest oznaczony jako rzeczywisty/inkasencki."
+                "Odczyt z faktury nie jest oznaczony jako zaufany odczyt rozliczeniowy."
             )
 
         parsed = _as_datetime(timestamp)
@@ -521,17 +548,19 @@ class DuonGazRuntime:
             raise ValueError("Odczyt z faktury musi mieć datę ze strefą czasową.")
 
         meter = round(float(meter_m3), 3)
+        meter_precision = max(float(meter_precision_m3), 0.001)
 
-        shadow = self._manual_anchor_near(parsed)
+        shadow = self._manual_anchor_near(parsed, meter, meter_precision)
         if shadow is not None:
             self.data.setdefault("invoice_readings", []).append(
                 {
                     "timestamp": parsed.isoformat(),
                     "meter_m3": meter,
-                    "meter_precision_m3": float(meter_precision_m3),
+                    "meter_precision_m3": meter_precision,
                     "timestamp_precision": timestamp_precision,
-                    "source": "invoice_actual",
+                    "source": "invoice_billing",
                     "reading_type": reading_type,
+                    "reading_classification": "trusted_billing_reading",
                     "invoice_id": invoice_id,
                     "quality": {
                         "state": "shadowed_by_manual",
@@ -558,10 +587,11 @@ class DuonGazRuntime:
                 {
                     "timestamp": parsed.isoformat(),
                     "meter_m3": meter,
-                    "meter_precision_m3": float(meter_precision_m3),
+                    "meter_precision_m3": meter_precision,
                     "timestamp_precision": timestamp_precision,
-                    "source": "invoice_actual",
+                    "source": "invoice_billing",
                     "reading_type": reading_type,
+                    "reading_classification": "trusted_billing_reading",
                     "invoice_id": invoice_id,
                     "quality": {
                         "state": "rejected_non_monotonic",
@@ -584,10 +614,11 @@ class DuonGazRuntime:
         reading = {
             "timestamp": parsed.isoformat(),
             "meter_m3": meter,
-            "meter_precision_m3": float(meter_precision_m3),
+            "meter_precision_m3": meter_precision,
             "timestamp_precision": timestamp_precision,
-            "source": "invoice_actual",
+            "source": "invoice_billing",
             "reading_type": reading_type,
+            "reading_classification": "trusted_billing_reading",
             "invoice_id": invoice_id,
             "recorder": {
                 "timestamp": snapshot.timestamp.isoformat(),
@@ -596,7 +627,7 @@ class DuonGazRuntime:
                 "method": "nearest_hourly_statistic",
             },
             "quality": {
-                "state": "invoice_actual",
+                "state": "invoice_billing",
                 "exclude_from_calibration": bool(exclude_from_calibration),
                 "exclude_from_estimation": False,
             },
@@ -700,7 +731,7 @@ class DuonGazRuntime:
             return "Oczekuje na kalibrację"
         if self.current_snapshot is None:
             return "Brak statystyk Ariston"
-        if last.get("source") == "invoice_actual":
+        if last.get("source") == "invoice_billing":
             return "Szacowane od faktury"
         return "Szacowane"
 
