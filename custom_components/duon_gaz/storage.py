@@ -6,7 +6,12 @@ from typing import Any
 
 from homeassistant.helpers.storage import Store
 
-from .const import STORAGE_KEY, STORAGE_VERSION
+from .const import (
+    DEFAULT_CO_M3_PER_KWH,
+    DEFAULT_DHW_M3_PER_KWH,
+    STORAGE_KEY,
+    STORAGE_VERSION,
+)
 
 
 def default_store_data() -> dict[str, Any]:
@@ -16,10 +21,10 @@ def default_store_data() -> dict[str, Any]:
         "pending_meter_m3": None,
         "manual_readings": [],
         "calibration": {
-            "co_m3_per_kwh": None,
-            "dhw_m3_per_kwh": None,
+            "co_m3_per_kwh": DEFAULT_CO_M3_PER_KWH,
+            "dhw_m3_per_kwh": DEFAULT_DHW_M3_PER_KWH,
             "effective_m3_per_kwh": None,
-            "method": None,
+            "method": "historical_bootstrap_2024_2026",
             "sample_count": 0,
             "mae_m3": None,
             "updated_at": None,
