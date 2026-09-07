@@ -20,5 +20,11 @@ DEFAULT_SUBSCRIPTION_NET = 8.00
 DEFAULT_DIST_FIXED_NET = 8.39
 DEFAULT_VAT = 0.23
 
+# Physical Ariston calibration reconstructed from validated 2024-2026
+# manual meter anchors and Recorder statistics. These are deliberately
+# independent from DUON's billing kWh/m3 conversion factor.
+DEFAULT_CO_M3_PER_KWH = 0.098834
+DEFAULT_DHW_M3_PER_KWH = 0.110474
+
 STORAGE_VERSION = 2
 STORAGE_KEY = "duon_gaz.data"
