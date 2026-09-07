@@ -297,4 +297,26 @@ class DuonStatusSensor(DuonBaseSensor):
                     "historia_audyt": preview.get("audit_intervals", []),
                 }
             )
+        publication = self.runtime.data.get("canonical_publication")
+        if isinstance(publication, dict):
+            attributes.update(
+                {
+                    "historia_statystyka_id": publication.get("statistic_id"),
+                    "historia_publikacja_status": publication.get("status"),
+                    "historia_publikacja_zlecona": publication.get("requested_at"),
+                    "historia_publikacja_zweryfikowana": publication.get(
+                        "verified", False
+                    ),
+                    "historia_publikacja_wiersze": publication.get("row_count"),
+                    "historia_publikacja_od": publication.get("start"),
+                    "historia_publikacja_do": publication.get("end"),
+                    "historia_publikacja_suma_pierwsza_m3": publication.get(
+                        "first_sum_m3"
+                    ),
+                    "historia_publikacja_suma_ostatnia_m3": publication.get(
+                        "last_sum_m3"
+                    ),
+                    "historia_rozliczona_do": publication.get("settled_through"),
+                }
+            )
         return attributes
