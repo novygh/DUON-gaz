@@ -242,9 +242,51 @@ class DuonStatusSensor(DuonBaseSensor):
 
     @property
     def extra_state_attributes(self):
-        return {
+        attributes = {
             "blad_snapshotu": self.runtime.snapshot_error,
             "liczba_odczytow": len(self.runtime._readings()),
             "liczba_korekt": len(self.runtime.data.get("corrections", [])),
             "liczba_faktur": len(self.runtime.data.get("billing_periods", [])),
         }
+        preview = self.runtime.data.get("canonical_preview")
+        if isinstance(preview, dict):
+            attributes.update(
+                {
+                    "historia_kanoniczna_wygenerowana": preview.get("generated_at"),
+                    "historia_opublikowana_do_recorder": preview.get(
+                        "published_to_recorder", False
+                    ),
+                    "historia_punkty_zrodlowe": preview.get("source_point_count"),
+                    "historia_kotwice": preview.get("anchor_count"),
+                    "historia_przedzialy": preview.get("interval_count"),
+                    "historia_godziny": preview.get("canonical_hour_count"),
+                    "historia_od": preview.get("start"),
+                    "historia_do": preview.get("end"),
+                    "historia_suma_fizyczna_m3": preview.get("physical_total_m3"),
+                    "historia_suma_kanoniczna_m3": preview.get(
+                        "canonical_total_m3"
+                    ),
+                    "historia_blad_domkniecia_m3": preview.get(
+                        "closure_error_m3"
+                    ),
+                    "historia_luki_godziny": preview.get(
+                        "reconstructed_gap_hours"
+                    ),
+                    "historia_rollback_kwh": preview.get(
+                        "rollback_correction_kwh"
+                    ),
+                    "historia_rollback_nierozliczony_kwh": preview.get(
+                        "unresolved_rollback_kwh"
+                    ),
+                    "historia_przedzialy_niska_pewnosc": preview.get(
+                        "low_confidence_interval_count"
+                    ),
+                    "historia_przedzialy_niepewny_czas": preview.get(
+                        "uncertain_anchor_interval_count"
+                    ),
+                    "historia_skala_min": preview.get("scale_factor_min"),
+                    "historia_skala_max": preview.get("scale_factor_max"),
+                    "historia_audyt": preview.get("audit_intervals", []),
+                }
+            )
+        return attributes
