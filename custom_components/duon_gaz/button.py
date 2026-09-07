@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .canonical_history import CanonicalHistoryError
 from .canonical_preview import async_rebuild_canonical_preview
+from .canonical_statistics import async_publish_canonical_statistics
 from .const import DOMAIN
 from .runtime import DuonGazRuntime
 
@@ -24,6 +25,7 @@ async def async_setup_entry(
         [
             DuonConfirmMeterButton(entry.runtime_data),
             DuonCanonicalPreviewButton(entry.runtime_data),
+            DuonCanonicalPublishButton(entry.runtime_data),
         ]
     )
 
@@ -104,5 +106,27 @@ class DuonCanonicalPreviewButton(ButtonEntity):
     async def async_press(self) -> None:
         try:
             await async_rebuild_canonical_preview(self.runtime)
+        except (CanonicalHistoryError, ValueError) as err:
+            raise HomeAssistantError(str(err)) from err
+
+
+class DuonCanonicalPublishButton(ButtonEntity):
+    """Publish settled canonical gas history through Recorder's statistics API."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Opublikuj historię DUON do Recorder"
+    _attr_unique_id = "duon_gaz_canonical_publish"
+    _attr_icon = "mdi:database-import-outline"
+
+    def __init__(self, runtime: DuonGazRuntime) -> None:
+        self.runtime = runtime
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return _device_info(self.runtime)
+
+    async def async_press(self) -> None:
+        try:
+            await async_publish_canonical_statistics(self.runtime)
         except (CanonicalHistoryError, ValueError) as err:
             raise HomeAssistantError(str(err)) from err
