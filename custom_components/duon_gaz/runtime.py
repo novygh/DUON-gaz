@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from statistics import median
 from typing import Any
@@ -23,7 +23,11 @@ from .const import (
     CONF_SUBSCRIPTION_NET,
     CONF_VAT,
 )
-from .recorder_stats import RecorderSnapshot, async_get_recorder_snapshot
+from .recorder_stats import (
+    RecorderSnapshot,
+    async_get_recorder_snapshot,
+    async_get_recorder_snapshot_at,
+)
 from .storage import DuonGazStore, default_store_data
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,6 +36,14 @@ _REFRESH_INTERVAL = timedelta(minutes=5)
 _MAX_CONFIRM_SNAPSHOT_AGE = timedelta(minutes=20)
 _MIN_CALIBRATION_COEFF = 0.04
 _MAX_CALIBRATION_COEFF = 0.20
+_MANUAL_INVOICE_SHADOW_WINDOW = timedelta(days=7)
+
+_TRUSTED_INVOICE_READING_TYPES = {
+    "actual",
+    "incasent",
+    "meter_reader",
+    "field_read",
+}
 
 
 def _as_float(value: Any) -> float | None:
@@ -41,6 +53,16 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else None
+    if isinstance(value, str):
+        parsed = dt_util.parse_datetime(value)
+        if parsed is not None and parsed.tzinfo is not None:
+            return parsed
+    return None
 
 
 def _reading_recorder_values(
@@ -61,6 +83,18 @@ def _reading_excluded(reading: dict[str, Any]) -> bool:
     return bool(
         isinstance(quality, dict) and quality.get("exclude_from_calibration", False)
     )
+
+
+def _reading_excluded_from_estimation(reading: dict[str, Any]) -> bool:
+    quality = reading.get("quality")
+    return bool(
+        isinstance(quality, dict) and quality.get("exclude_from_estimation", False)
+    )
+
+
+def _reading_sort_key(reading: dict[str, Any]) -> float:
+    timestamp = _as_datetime(reading.get("timestamp"))
+    return float("-inf") if timestamp is None else timestamp.timestamp()
 
 
 def _solve_two_component(
@@ -226,13 +260,63 @@ class DuonGazRuntime:
         await self.async_save()
         self.async_notify()
 
-    def _readings(self) -> list[dict[str, Any]]:
+    def _manual_readings(self) -> list[dict[str, Any]]:
         readings = self.data.get("manual_readings")
         return readings if isinstance(readings, list) else []
+
+    def _invoice_readings(self) -> list[dict[str, Any]]:
+        readings = self.data.get("invoice_readings")
+        return readings if isinstance(readings, list) else []
+
+    def _readings(self) -> list[dict[str, Any]]:
+        """Return all trusted physical anchors in chronological order."""
+        combined = [
+            *self._manual_readings(),
+            *self._invoice_readings(),
+        ]
+        return sorted(
+            (
+                reading
+                for reading in combined
+                if not _reading_excluded_from_estimation(reading)
+            ),
+            key=_reading_sort_key,
+        )
 
     def _last_reading(self) -> dict[str, Any] | None:
         readings = self._readings()
         return readings[-1] if readings else None
+
+    def _manual_anchor_near(self, timestamp: datetime) -> dict[str, Any] | None:
+        nearest = None
+        nearest_distance = None
+        for reading in self._manual_readings():
+            reading_time = _as_datetime(reading.get("timestamp"))
+            if reading_time is None:
+                continue
+            distance = abs(reading_time - timestamp)
+            if distance > _MANUAL_INVOICE_SHADOW_WINDOW:
+                continue
+            if nearest_distance is None or distance < nearest_distance:
+                nearest = reading
+                nearest_distance = distance
+        return nearest
+
+    def _trusted_neighbors(
+        self, timestamp: datetime
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        previous = None
+        following = None
+        for reading in self._readings():
+            reading_time = _as_datetime(reading.get("timestamp"))
+            if reading_time is None:
+                continue
+            if reading_time <= timestamp:
+                previous = reading
+                continue
+            following = reading
+            break
+        return previous, following
 
     async def async_refresh_source_snapshot(
         self,
@@ -340,6 +424,23 @@ class DuonGazRuntime:
             }
         )
 
+    def _add_settled_delta(self, actual_delta: float) -> None:
+        if actual_delta < 0:
+            return
+        totals = self.data.setdefault("totals", {})
+        totals["provisional_energy_kwh"] = float(
+            totals.get("provisional_energy_kwh", 0.0)
+        ) + actual_delta * self.conversion_factor
+        variable_gross = (
+            actual_delta
+            * self.conversion_factor
+            * (self.gas_rate_net + self.dist_var_rate_net)
+            * (1 + self.vat)
+        )
+        totals["provisional_variable_cost_gross"] = float(
+            totals.get("provisional_variable_cost_gross", 0.0)
+        ) + variable_gross
+
     async def async_confirm_meter(self) -> None:
         """Save pending meter value with a coherent Recorder statistics snapshot."""
         pending = self.pending_meter_m3
@@ -366,6 +467,8 @@ class DuonGazRuntime:
         reading = {
             "timestamp": now.isoformat(),
             "meter_m3": pending,
+            "meter_precision_m3": 0.001,
+            "timestamp_precision": "exact",
             "source": "manual",
             "recorder": {
                 "timestamp": snapshot.timestamp.isoformat(),
@@ -375,33 +478,144 @@ class DuonGazRuntime:
             "quality": {
                 "state": "good",
                 "exclude_from_calibration": False,
+                "exclude_from_estimation": False,
             },
         }
 
         if last:
             previous_meter = _as_float(last.get("meter_m3"))
             if previous_meter is not None:
-                actual_delta = pending - previous_meter
-                if actual_delta >= 0:
-                    totals = self.data.setdefault("totals", {})
-                    totals["provisional_energy_kwh"] = float(
-                        totals.get("provisional_energy_kwh", 0.0)
-                    ) + actual_delta * self.conversion_factor
-                    variable_gross = (
-                        actual_delta
-                        * self.conversion_factor
-                        * (self.gas_rate_net + self.dist_var_rate_net)
-                        * (1 + self.vat)
-                    )
-                    totals["provisional_variable_cost_gross"] = float(
-                        totals.get("provisional_variable_cost_gross", 0.0)
-                    ) + variable_gross
+                self._add_settled_delta(pending - previous_meter)
 
         self.data.setdefault("manual_readings", []).append(reading)
         self.data["pending_meter_m3"] = pending
         self._recalculate_calibration()
         await self.async_save()
         self.async_notify()
+
+    async def async_add_invoice_anchor(
+        self,
+        *,
+        meter_m3: float,
+        timestamp: datetime | str,
+        reading_type: str,
+        invoice_id: str | None = None,
+        timestamp_precision: str = "day",
+        meter_precision_m3: float = 1.0,
+        exclude_from_calibration: bool = False,
+    ) -> bool:
+        """Add a trusted physical meter anchor originating from an invoice.
+
+        Only actual field-reader readings are eligible. Estimated/billing-only
+        readings must stay in billing_periods and are never allowed to move the
+        physical meter baseline.
+        """
+        reading_type = reading_type.strip().lower()
+        if reading_type not in _TRUSTED_INVOICE_READING_TYPES:
+            raise ValueError(
+                "Odczyt z faktury nie jest oznaczony jako rzeczywisty/inkasencki."
+            )
+
+        parsed = _as_datetime(timestamp)
+        if parsed is None:
+            raise ValueError("Odczyt z faktury musi mieć datę ze strefą czasową.")
+
+        meter = round(float(meter_m3), 3)
+
+        shadow = self._manual_anchor_near(parsed)
+        if shadow is not None:
+            self.data.setdefault("invoice_readings", []).append(
+                {
+                    "timestamp": parsed.isoformat(),
+                    "meter_m3": meter,
+                    "meter_precision_m3": float(meter_precision_m3),
+                    "timestamp_precision": timestamp_precision,
+                    "source": "invoice_actual",
+                    "reading_type": reading_type,
+                    "invoice_id": invoice_id,
+                    "quality": {
+                        "state": "shadowed_by_manual",
+                        "exclude_from_calibration": True,
+                        "exclude_from_estimation": True,
+                    },
+                    "shadowed_by_manual_timestamp": shadow.get("timestamp"),
+                }
+            )
+            await self.async_save()
+            self.async_notify()
+            return False
+
+        previous, following = self._trusted_neighbors(parsed)
+        previous_meter = _as_float(previous.get("meter_m3")) if previous else None
+        following_meter = _as_float(following.get("meter_m3")) if following else None
+
+        monotonic = not (
+            (previous_meter is not None and meter < previous_meter)
+            or (following_meter is not None and meter > following_meter)
+        )
+        if not monotonic:
+            self.data.setdefault("invoice_readings", []).append(
+                {
+                    "timestamp": parsed.isoformat(),
+                    "meter_m3": meter,
+                    "meter_precision_m3": float(meter_precision_m3),
+                    "timestamp_precision": timestamp_precision,
+                    "source": "invoice_actual",
+                    "reading_type": reading_type,
+                    "invoice_id": invoice_id,
+                    "quality": {
+                        "state": "rejected_non_monotonic",
+                        "exclude_from_calibration": True,
+                        "exclude_from_estimation": True,
+                    },
+                }
+            )
+            await self.async_save()
+            self.async_notify()
+            return False
+
+        snapshot = await async_get_recorder_snapshot_at(
+            self.hass,
+            self.heating_entity,
+            self.dhw_entity,
+            parsed,
+        )
+
+        reading = {
+            "timestamp": parsed.isoformat(),
+            "meter_m3": meter,
+            "meter_precision_m3": float(meter_precision_m3),
+            "timestamp_precision": timestamp_precision,
+            "source": "invoice_actual",
+            "reading_type": reading_type,
+            "invoice_id": invoice_id,
+            "recorder": {
+                "timestamp": snapshot.timestamp.isoformat(),
+                "co_sum_kwh": snapshot.heating_sum_kwh,
+                "dhw_sum_kwh": snapshot.dhw_sum_kwh,
+                "method": "nearest_hourly_statistic",
+            },
+            "quality": {
+                "state": "invoice_actual",
+                "exclude_from_calibration": bool(exclude_from_calibration),
+                "exclude_from_estimation": False,
+            },
+        }
+
+        old_last = self._last_reading()
+        self.data.setdefault("invoice_readings", []).append(reading)
+        new_last = self._last_reading()
+
+        if new_last is reading and old_last is not None:
+            old_meter = _as_float(old_last.get("meter_m3"))
+            if old_meter is not None:
+                self._add_settled_delta(meter - old_meter)
+
+        self._recalculate_calibration()
+        await self.async_save()
+        await self.async_refresh_source_snapshot(notify=False)
+        self.async_notify()
+        return True
 
     def current_source_delta_kwh(self) -> tuple[float, float]:
         """Return cached Recorder CO/CWU kWh since the last physical anchor."""
@@ -479,12 +693,15 @@ class DuonGazRuntime:
         return effective * self.conversion_factor
 
     def status(self) -> str:
-        if self._last_reading() is None:
-            return "Oczekuje na pierwszy odczyt"
+        last = self._last_reading()
+        if last is None:
+            return "Oczekuje na pierwszy punkt gazomierza"
         if self.co_m3_per_kwh is None or self.dhw_m3_per_kwh is None:
             return "Oczekuje na kalibrację"
         if self.current_snapshot is None:
             return "Brak statystyk Ariston"
+        if last.get("source") == "invoice_actual":
+            return "Szacowane od faktury"
         return "Szacowane"
 
     def async_start(self) -> None:
