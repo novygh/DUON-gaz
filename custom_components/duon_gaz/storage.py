@@ -21,7 +21,11 @@ def default_store_data() -> dict[str, Any]:
         "pending_meter_m3": None,
         "pending_entered_by_user_id": None,
         "pending_entered_at": None,
+        # Exact/manual anchors. Historical imports also live here.
         "manual_readings": [],
+        # Trusted invoice/field-reader anchors are kept separately so their
+        # lower timestamp/meter precision remains auditable.
+        "invoice_readings": [],
         "calibration": {
             "co_m3_per_kwh": DEFAULT_CO_M3_PER_KWH,
             "dhw_m3_per_kwh": DEFAULT_DHW_M3_PER_KWH,
