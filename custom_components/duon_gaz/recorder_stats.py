@@ -70,6 +70,26 @@ def _coherent_snapshot(
     return RecorderSnapshot(timestamp, heating_sum, dhw_sum)
 
 
+def _nearest_coherent_snapshot(
+    result: dict[str, list[dict[str, Any]]],
+    heating_entity: str,
+    dhw_entity: str,
+    target: datetime,
+) -> RecorderSnapshot | None:
+    """Return the common CO/CWU hourly point closest to target."""
+    heating_rows = _rows_by_timestamp(result, heating_entity)
+    dhw_rows = _rows_by_timestamp(result, dhw_entity)
+    common = heating_rows.keys() & dhw_rows.keys()
+    if not common:
+        return None
+
+    target_ts = target.timestamp()
+    key = min(common, key=lambda item: abs(item - target_ts))
+    timestamp, heating_sum = heating_rows[key]
+    _, dhw_sum = dhw_rows[key]
+    return RecorderSnapshot(timestamp, heating_sum, dhw_sum)
+
+
 async def async_get_recorder_snapshot(
     hass: HomeAssistant,
     heating_entity: str,
@@ -124,3 +144,41 @@ async def async_get_recorder_snapshot(
         return snapshot
 
     raise ValueError("Brak wspólnego punktu statystyk Recorder dla CO i CWU.")
+
+
+async def async_get_recorder_snapshot_at(
+    hass: HomeAssistant,
+    heating_entity: str,
+    dhw_entity: str,
+    target: datetime,
+    *,
+    window: timedelta = timedelta(hours=36),
+) -> RecorderSnapshot:
+    """Return the coherent hourly Recorder point closest to a historical anchor.
+
+    This is intended for invoice/field-reader readings which may only identify
+    the reading date rather than the exact minute. The caller must retain the
+    original timestamp precision in the anchor quality metadata.
+    """
+    if target.tzinfo is None:
+        raise ValueError("Historyczny punkt gazomierza musi mieć strefę czasową.")
+
+    recorder = get_instance(hass)
+    result = await recorder.async_add_executor_job(
+        statistics_during_period,
+        hass,
+        target - window,
+        target + window,
+        {heating_entity, dhw_entity},
+        "hour",
+        None,
+        {"sum"},
+    )
+    snapshot = _nearest_coherent_snapshot(
+        result, heating_entity, dhw_entity, target
+    )
+    if snapshot is None:
+        raise ValueError("Brak statystyk Recorder w pobliżu odczytu z faktury.")
+    if abs(snapshot.timestamp - target) > window:
+        raise ValueError("Najbliższy punkt Recorder jest zbyt daleko od odczytu z faktury.")
+    return snapshot
