@@ -31,6 +31,8 @@ async def async_setup_entry(
             DuonCurrentDhwSensor(runtime),
             DuonConversionSensor(runtime),
             DuonCalibrationSensor(runtime),
+            DuonHeatingCalibrationSensor(runtime),
+            DuonDhwCalibrationSensor(runtime),
             DuonStatusSensor(runtime),
         ]
     )
@@ -83,11 +85,19 @@ class DuonMeterSensor(DuonBaseSensor):
     @property
     def extra_state_attributes(self):
         last = self.runtime._last_reading()
+        snapshot = self.runtime.current_snapshot
+        calibration = self.runtime.data.get("calibration", {})
         return {
             "status": self.runtime.status(),
             "ostatni_potwierdzony_odczyt": None if last is None else last["meter_m3"],
             "ostatni_potwierdzony_czas": None if last is None else last["timestamp"],
-            "kalibracja_ariston": round(float(self.runtime.data.get("calibration_factor", 1.0)), 5),
+            "recorder_snapshot": None
+            if snapshot is None
+            else snapshot.timestamp.isoformat(),
+            "kalibracja_co_m3_kwh": self.runtime.co_m3_per_kwh,
+            "kalibracja_cwu_m3_kwh": self.runtime.dhw_m3_per_kwh,
+            "kalibracja_probki": calibration.get("sample_count", 0),
+            "kalibracja_mae_m3": calibration.get("mae_m3"),
         }
 
 
@@ -103,6 +113,13 @@ class DuonEnergySensor(DuonBaseSensor):
     def native_value(self):
         value = self.runtime.estimated_energy_kwh()
         return None if value is None else round(value, 2)
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "status": "provisional",
+            "wspolczynnik_billingowy_kwh_m3": self.runtime.conversion_factor,
+        }
 
 
 class DuonCostSensor(DuonBaseSensor):
@@ -121,7 +138,7 @@ class DuonCostSensor(DuonBaseSensor):
     @property
     def extra_state_attributes(self):
         return {
-            "status": self.runtime.status(),
+            "status": "provisional",
             "cena_gazu_netto_pln_kwh": self.runtime.gas_rate_net,
             "dystrybucja_zmienna_netto_pln_kwh": self.runtime.dist_var_rate_net,
             "abonament_netto_pln_miesiac": self.runtime.subscription_net,
@@ -135,7 +152,6 @@ class DuonCurrentHeatingSensor(DuonBaseSensor):
     _attr_unique_id = "duon_gaz_current_heating"
     _attr_icon = "mdi:radiator"
     _attr_device_class = SensorDeviceClass.GAS
-    _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
 
     @property
@@ -148,7 +164,6 @@ class DuonCurrentDhwSensor(DuonBaseSensor):
     _attr_unique_id = "duon_gaz_current_dhw"
     _attr_icon = "mdi:water-boiler"
     _attr_device_class = SensorDeviceClass.GAS
-    _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
 
     @property
@@ -171,13 +186,49 @@ class DuonConversionSensor(DuonBaseSensor):
 
 
 class DuonCalibrationSensor(DuonBaseSensor):
+    """Compatibility aggregate for the original single-factor entity."""
+
     _attr_name = "Korekta Ariston"
     _attr_unique_id = "duon_gaz_ariston_calibration"
     _attr_icon = "mdi:tune"
 
     @property
     def native_value(self):
-        return round(float(self.runtime.data.get("calibration_factor", 1.0)), 5)
+        value = self.runtime.legacy_calibration_factor()
+        return None if value is None else round(value, 5)
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "diagnostyczny": True,
+            "uzywany_do_obliczen": False,
+            "co_m3_kwh": self.runtime.co_m3_per_kwh,
+            "cwu_m3_kwh": self.runtime.dhw_m3_per_kwh,
+        }
+
+
+class DuonHeatingCalibrationSensor(DuonBaseSensor):
+    _attr_name = "Kalibracja Ariston CO"
+    _attr_unique_id = "duon_gaz_ariston_heating_m3_per_kwh"
+    _attr_icon = "mdi:radiator"
+    _attr_native_unit_of_measurement = "m³/kWh"
+
+    @property
+    def native_value(self):
+        value = self.runtime.co_m3_per_kwh
+        return None if value is None else round(value, 6)
+
+
+class DuonDhwCalibrationSensor(DuonBaseSensor):
+    _attr_name = "Kalibracja Ariston CWU"
+    _attr_unique_id = "duon_gaz_ariston_dhw_m3_per_kwh"
+    _attr_icon = "mdi:water-boiler"
+    _attr_native_unit_of_measurement = "m³/kWh"
+
+    @property
+    def native_value(self):
+        value = self.runtime.dhw_m3_per_kwh
+        return None if value is None else round(value, 6)
 
 
 class DuonStatusSensor(DuonBaseSensor):
@@ -188,3 +239,12 @@ class DuonStatusSensor(DuonBaseSensor):
     @property
     def native_value(self):
         return self.runtime.status()
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "blad_snapshotu": self.runtime.snapshot_error,
+            "liczba_odczytow": len(self.runtime._readings()),
+            "liczba_korekt": len(self.runtime.data.get("corrections", [])),
+            "liczba_faktur": len(self.runtime.data.get("billing_periods", [])),
+        }
