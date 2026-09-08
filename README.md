@@ -4,11 +4,11 @@ Niestandardowa integracja dla Home Assistanta do rekonstrukcji i bieżącego śl
 
 ## Aktualna wersja
 
-**0.4.1** — stabilne wydanie dodające informacyjny audyt współczynnika konwersji względem lokalnej relacji Ariston + gazomierz.
+**0.4.2** — stabilne wydanie uzupełniające informacyjny audyt współczynnika konwersji o prawdziwą historię długoterminową w Recorderze.
 
-Szczegółowe informacje o wydaniu: [`RELEASE_NOTES_0.4.1.md`](RELEASE_NOTES_0.4.1.md).
+Szczegółowe informacje o wydaniu: [`RELEASE_NOTES_0.4.2.md`](RELEASE_NOTES_0.4.2.md).
 
-## Co potrafi 0.4.1
+## Co potrafi 0.4.2
 
 - wybiera dowolne dwa sensory Home Assistanta jako źródła CO i CWU,
 - korzysta ze skumulowanych statystyk `sum` z Recorder,
@@ -52,7 +52,9 @@ duon_gaz:canonical_fixed_cost
 - nie modyfikuje surowych statystyk źródłowych CO/CWU,
 - udostępnia informacyjny sensor `Audyt współczynnika konwersji`, który porównuje współczynnik DUON z lokalną historyczną relacją Ariston + gazomierz,
 - w audycie używa tylko faktur z dwiema dokładnie dopasowanymi ręcznymi granicami odczytu; pozostałych okresów nie zgaduje,
-- pokazuje podpisane saldo w PLN z perspektywy użytkownika: `+` oznacza korzyść użytkownika, `-` oznacza koszt wyższy niż lokalna referencja.
+- pokazuje podpisane saldo w PLN z perspektywy użytkownika: `+` oznacza korzyść użytkownika, `-` oznacza koszt wyższy niż lokalna referencja,
+- publikuje prawdziwy historyczny przebieg salda audytu do długoterminowych statystyk Recorder, z punktem `0 PLN` na początku pierwszego wiarygodnego okresu i kolejnymi skumulowanymi wartościami po zakończeniu ocenianych okresów,
+- backfill historii audytu korzysta z publicznego API Recorder i nie zapisuje bezpośrednio do SQL.
 
 ## Audyt współczynnika konwersji
 
@@ -64,6 +66,8 @@ Stan encji jest skumulowanym odchyleniem kosztu zmiennego w PLN liczonym z persp
 
 - wartość dodatnia — korzystniej dla użytkownika niż lokalna referencja,
 - wartość ujemna — mniej korzystnie dla użytkownika niż lokalna referencja.
+
+Od wersji 0.4.2 ten sam przebieg jest publikowany także jako historia długoterminowa Recorder. Dzięki temu wbudowany wykres Home Assistanta może pokazywać rzeczywiste historyczne fluktuacje audytu od pierwszego wiarygodnego okresu, a nie wyłącznie zmiany bieżącego stanu encji od momentu jej utworzenia.
 
 To nie jest laboratoryjny pomiar ciepła spalania ani dowód błędnego rozliczenia. Bez niezależnego kalorymetru audyt może wykrywać dryf i odchylenie względem własnej historii, ale nie bezwzględny błąd dostawcy.
 
@@ -146,7 +150,7 @@ Jeżeli w Energy Dashboard używany jest rozdział CO/CWU, nie należy dodawać 
 
 DUON Gaz korzysta z oficjalnych interfejsów Home Assistant Recorder. Nie zapisuje bezpośrednio do SQL i nie nadpisuje oryginalnych statystyk CO/CWU.
 
-## Stan walidacji 0.4.1
+## Stan walidacji 0.4.2
 
 Na działającej instalacji potwierdzono m.in.:
 
@@ -161,11 +165,13 @@ Na działającej instalacji potwierdzono m.in.:
 - brak ujemnego zużycia i nierozliczonych rollbacków,
 - dokładne domknięcie używanych okresów audytu `m³ faktura = m³ lokalne`,
 - pomijanie faktur bez dwóch dokładnych ręcznych granic,
-- poprawną, odwróconą z perspektywy użytkownika konwencję znaku salda audytu.
+- poprawną, odwróconą z perspektywy użytkownika konwencję znaku salda audytu,
+- poprawny backfill historycznego przebiegu audytu do Recorder,
+- brak sztucznych skoków pochodzących z wcześniejszych wersji developerskich po jednorazowym oczyszczeniu historii testowej.
 
 ## Dalszy rozwój
 
-Po wydaniu 0.4.1 pozostają osobno m.in.:
+Po wydaniu 0.4.2 pozostają osobno m.in.:
 
 - finalna konfiguracja Energy Dashboard na działającej instalacji,
 - SMS.
