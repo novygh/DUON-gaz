@@ -42,7 +42,8 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-OAUTH2_SCOPES = ["offline_access", "Mail.Read", "User.Read"]
+# Minimalny zakres delegowany: tylko odczyt poczty oraz token odświeżania.
+OAUTH2_SCOPES = ["offline_access", "Mail.Read"]
 
 
 def _configuration_schema() -> vol.Schema:
