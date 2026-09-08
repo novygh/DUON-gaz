@@ -17,6 +17,30 @@ import_history:
       selector:
         boolean:
 
+import_invoice:
+  name: Importuj fakturę PDF
+  description: Odczytuje zaszyfrowaną fakturę DUON z katalogu /config, zapisuje dane rozliczeniowe i w razie potrzeby aktualizuje historię kanoniczną.
+  fields:
+    path:
+      name: Plik PDF
+      description: Ścieżka do faktury względem katalogu /config, np. duon/faktura.pdf.
+      required: true
+      selector:
+        text:
+    password:
+      name: Hasło do PDF
+      description: Hasło służy tylko do bieżącego odczytu faktury i nie jest zapisywane przez integrację.
+      required: true
+      selector:
+        text:
+          type: password
+    source_message_id:
+      name: Identyfikator wiadomości
+      description: Opcjonalny identyfikator wiadomości źródłowej, używany później przez automatyczny import z poczty.
+      required: false
+      selector:
+        text:
+
 refresh_tail:
   name: Odśwież bieżący ogon
   description: Aktualizuje w Recorder tylko bieżącą, nierozliczoną część historii DUON. Gdy zmienił się odczyt fizyczny, źródło lub kalibracja, automatycznie wykonuje pełną przebudowę.
