@@ -1,4 +1,4 @@
-"""Publish canonical DUON gas history as external Recorder statistics."""
+"""Publish canonical DUON gas history and costs as external Recorder statistics."""
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +21,12 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import VolumeConverter
 
 from .canonical_builder import CanonicalBuild, async_build_canonical_bundle
+from .canonical_costs import (
+    CanonicalCostError,
+    CanonicalCostResult,
+    billing_period_fingerprint,
+    build_canonical_costs,
+)
 from .canonical_history import CanonicalHistoryError, CanonicalHour
 from .canonical_series import select_provisional_refresh_hours
 from .const import DOMAIN
@@ -29,6 +35,10 @@ from .publication_rules import active_anchor_fingerprint, active_anchor_set_chan
 CANONICAL_GAS_STATISTIC_ID = f"{DOMAIN}:canonical_gas"
 CANONICAL_HEATING_STATISTIC_ID = f"{DOMAIN}:canonical_heating"
 CANONICAL_DHW_STATISTIC_ID = f"{DOMAIN}:canonical_dhw"
+CANONICAL_FIXED_COST_GAS_STATISTIC_ID = f"{DOMAIN}:canonical_fixed_cost_gas"
+CANONICAL_HEATING_COST_STATISTIC_ID = f"{DOMAIN}:canonical_heating_cost"
+CANONICAL_DHW_COST_STATISTIC_ID = f"{DOMAIN}:canonical_dhw_cost"
+CANONICAL_FIXED_COST_STATISTIC_ID = f"{DOMAIN}:canonical_fixed_cost"
 _PUBLISH_LOCKS: dict[str, asyncio.Lock] = {}
 _EPSILON = 1e-9
 
@@ -54,7 +64,7 @@ def _validate_monotonic(rows: list[StatisticData]) -> None:
         if not math.isfinite(current_sum) or not math.isfinite(state):
             raise CanonicalHistoryError("Historia kanoniczna zawiera wartość nienumeryczną.")
         if state < -1e-9:
-            raise CanonicalHistoryError("Historia kanoniczna zawiera ujemne zużycie godzinowe.")
+            raise CanonicalHistoryError("Historia kanoniczna zawiera ujemną wartość godzinową.")
         if previous_start is not None and start <= previous_start:
             raise CanonicalHistoryError("Godziny historii kanonicznej nie są rosnące.")
         if previous_sum is not None and current_sum < previous_sum - 1e-9:
@@ -80,7 +90,7 @@ def _component_statistics_from_hours(
     hours: tuple[CanonicalHour, ...],
     attribute: str,
 ) -> list[StatisticData]:
-    """Build a cumulative component series from the complete canonical history."""
+    """Build a cumulative volume component series from complete history."""
     cumulative = 0.0
     statistics: list[StatisticData] = []
     for hour in hours:
@@ -102,6 +112,42 @@ def _component_statistics_from_hours(
     return statistics
 
 
+def _cost_statistics_from_result(
+    costs: CanonicalCostResult,
+    attribute: str,
+) -> list[StatisticData]:
+    """Build one cumulative PLN component series from canonical costs."""
+    cumulative = 0.0
+    statistics: list[StatisticData] = []
+    for hour in costs.hours:
+        value = float(getattr(hour, attribute))
+        if not math.isfinite(value) or value < -_EPSILON:
+            raise CanonicalHistoryError(
+                "Historia kosztów kanonicznych zawiera nieprawidłową wartość."
+            )
+        state = max(0.0, value)
+        cumulative += state
+        statistics.append(
+            StatisticData(
+                start=hour.start,
+                state=round(state, 6),
+                sum=round(cumulative, 6),
+            )
+        )
+    _validate_monotonic(statistics)
+    return statistics
+
+
+def _zero_volume_statistics(hours: tuple[CanonicalHour, ...]) -> list[StatisticData]:
+    """Build a zero-m3 carrier for fixed gas costs in Energy Dashboard."""
+    statistics = [
+        StatisticData(start=hour.start, state=0.0, sum=0.0)
+        for hour in hours
+    ]
+    _validate_monotonic(statistics)
+    return statistics
+
+
 def _select_statistics_for_hours(
     statistics: list[StatisticData],
     hours: tuple[CanonicalHour, ...],
@@ -111,12 +157,12 @@ def _select_statistics_for_hours(
     selected = [row for row in statistics if row["start"] in starts]
     if len(selected) != len(hours):
         raise CanonicalHistoryError(
-            "Nie udało się dopasować godzin CO/CWU do odświeżanego ogona."
+            "Nie udało się dopasować statystyk do odświeżanego ogona."
         )
     return selected
 
 
-def _metadata(
+def _volume_metadata(
     statistic_id: str = CANONICAL_GAS_STATISTIC_ID,
     name: str = "DUON Gaz — historia kanoniczna",
 ) -> StatisticMetaData:
@@ -128,6 +174,19 @@ def _metadata(
         statistic_id=statistic_id,
         unit_class=VolumeConverter.UNIT_CLASS,
         unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+    )
+
+
+def _cost_metadata(statistic_id: str, name: str) -> StatisticMetaData:
+    """Return external monetary metadata accepted by Energy Dashboard."""
+    return StatisticMetaData(
+        mean_type=StatisticMeanType.NONE,
+        has_sum=True,
+        name=name,
+        source=DOMAIN,
+        statistic_id=statistic_id,
+        unit_class=None,
+        unit_of_measurement="PLN",
     )
 
 
@@ -177,7 +236,9 @@ def _validate_build(build: CanonicalBuild) -> None:
 
     unattributed = 0.0
     for hour in build.combined.hours:
-        if abs((hour.heating_m3 + hour.dhw_m3 + hour.unattributed_m3) - hour.gas_m3) > 1e-6:
+        if abs(
+            (hour.heating_m3 + hour.dhw_m3 + hour.unattributed_m3) - hour.gas_m3
+        ) > 1e-6:
             raise CanonicalHistoryError(
                 "Składniki CO/CWU historii kanonicznej nie sumują się do całkowitego gazu."
             )
@@ -187,6 +248,23 @@ def _validate_build(build: CanonicalBuild) -> None:
             "Historia zawiera gaz bez defensywnego przypisania do CO lub CWU; "
             "rozdzielone statystyki nie mogą zostać opublikowane."
         )
+
+
+def _build_costs(runtime, build: CanonicalBuild) -> CanonicalCostResult:
+    try:
+        return build_canonical_costs(
+            build.combined.hours,
+            runtime.data.get("billing_periods", []),
+            timezone=dt_util.DEFAULT_TIME_ZONE,
+            conversion_factor_kwh_m3=runtime.conversion_factor,
+            gas_rate_net_pln_kwh=runtime.gas_rate_net,
+            distribution_variable_net_pln_kwh=runtime.dist_var_rate_net,
+            subscription_net_pln_month=runtime.subscription_net,
+            distribution_fixed_net_pln_month=runtime.dist_fixed_net,
+            vat_rate=runtime.vat,
+        )
+    except CanonicalCostError as err:
+        raise CanonicalHistoryError(str(err)) from err
 
 
 async def _async_verify_statistic(
@@ -235,8 +313,8 @@ async def _async_verify_statistic(
 
     return {
         "last_start": row.get("start"),
-        "last_state_m3": row.get("state"),
-        "last_sum_m3": float(last_sum),
+        "last_state": row.get("state"),
+        "last_sum": float(last_sum),
     }
 
 
@@ -245,8 +323,12 @@ async def _async_verify_publication(
     gas_statistics: list[StatisticData],
     heating_statistics: list[StatisticData],
     dhw_statistics: list[StatisticData],
+    fixed_gas_statistics: list[StatisticData],
+    heating_cost_statistics: list[StatisticData],
+    dhw_cost_statistics: list[StatisticData],
+    fixed_cost_statistics: list[StatisticData],
 ) -> dict[str, Any]:
-    """Wait for Recorder and verify total gas, heating and DHW statistics."""
+    """Wait for Recorder and verify all volume and cost statistics."""
     recorder = get_instance(runtime.hass)
     await recorder.async_block_till_done()
 
@@ -268,16 +350,67 @@ async def _async_verify_publication(
         dhw_statistics[-1]["start"],
         float(dhw_statistics[-1]["sum"]),
     )
+    fixed_gas = await _async_verify_statistic(
+        runtime,
+        CANONICAL_FIXED_COST_GAS_STATISTIC_ID,
+        fixed_gas_statistics[-1]["start"],
+        0.0,
+    )
+    heating_cost = await _async_verify_statistic(
+        runtime,
+        CANONICAL_HEATING_COST_STATISTIC_ID,
+        heating_cost_statistics[-1]["start"],
+        float(heating_cost_statistics[-1]["sum"]),
+    )
+    dhw_cost = await _async_verify_statistic(
+        runtime,
+        CANONICAL_DHW_COST_STATISTIC_ID,
+        dhw_cost_statistics[-1]["start"],
+        float(dhw_cost_statistics[-1]["sum"]),
+    )
+    fixed_cost = await _async_verify_statistic(
+        runtime,
+        CANONICAL_FIXED_COST_STATISTIC_ID,
+        fixed_cost_statistics[-1]["start"],
+        float(fixed_cost_statistics[-1]["sum"]),
+    )
 
     return {
         "verified_at": dt_util.utcnow().isoformat(),
         "last_start": gas["last_start"],
-        "last_state_m3": gas["last_state_m3"],
-        "last_sum_m3": gas["last_sum_m3"],
-        "heating_last_sum_m3": heating["last_sum_m3"],
-        "dhw_last_sum_m3": dhw["last_sum_m3"],
+        "last_state_m3": gas["last_state"],
+        "last_sum_m3": gas["last_sum"],
+        "heating_last_sum_m3": heating["last_sum"],
+        "dhw_last_sum_m3": dhw["last_sum"],
         "component_statistics_verified": True,
+        "fixed_cost_gas_last_sum_m3": fixed_gas["last_sum"],
+        "heating_cost_last_sum_pln": heating_cost["last_sum"],
+        "dhw_cost_last_sum_pln": dhw_cost["last_sum"],
+        "fixed_cost_last_sum_pln": fixed_cost["last_sum"],
+        "cost_statistics_verified": True,
     }
+
+
+def _cost_configuration_changed(runtime, publication: dict[str, Any]) -> bool:
+    pairs = (
+        (publication.get("cost_conversion_factor_kwh_m3"), runtime.conversion_factor),
+        (publication.get("cost_gas_rate_net_pln_kwh"), runtime.gas_rate_net),
+        (
+            publication.get("cost_distribution_variable_net_pln_kwh"),
+            runtime.dist_var_rate_net,
+        ),
+        (publication.get("cost_subscription_net_pln_month"), runtime.subscription_net),
+        (
+            publication.get("cost_distribution_fixed_net_pln_month"),
+            runtime.dist_fixed_net,
+        ),
+        (publication.get("cost_vat_rate"), runtime.vat),
+    )
+    for previous, current in pairs:
+        previous_value = _as_float(previous)
+        if previous_value is None or abs(previous_value - float(current)) > 1e-12:
+            return True
+    return False
 
 
 def _publication_requires_full_rebuild(
@@ -285,13 +418,33 @@ def _publication_requires_full_rebuild(
     publication: dict[str, Any],
     build: CanonicalBuild,
 ) -> str | None:
-    """Return why an incremental tail refresh is unsafe, if anything."""
+    """Return why an incremental refresh is unsafe, if anything."""
     if (
         publication.get("heating_statistic_id") != CANONICAL_HEATING_STATISTIC_ID
         or publication.get("dhw_statistic_id") != CANONICAL_DHW_STATISTIC_ID
         or not publication.get("component_statistics_verified", False)
     ):
         return "component_statistics_missing"
+
+    if (
+        publication.get("fixed_cost_gas_statistic_id")
+        != CANONICAL_FIXED_COST_GAS_STATISTIC_ID
+        or publication.get("heating_cost_statistic_id")
+        != CANONICAL_HEATING_COST_STATISTIC_ID
+        or publication.get("dhw_cost_statistic_id") != CANONICAL_DHW_COST_STATISTIC_ID
+        or publication.get("fixed_cost_statistic_id") != CANONICAL_FIXED_COST_STATISTIC_ID
+        or not publication.get("cost_statistics_verified", False)
+    ):
+        return "cost_statistics_missing"
+
+    billing_periods = runtime.data.get("billing_periods", [])
+    if publication.get("billing_period_fingerprint") != billing_period_fingerprint(
+        billing_periods
+    ):
+        return "billing_periods_changed"
+
+    if _cost_configuration_changed(runtime, publication):
+        return "cost_configuration_changed"
 
     active_readings = runtime._readings()
     if active_anchor_set_changed(
@@ -322,9 +475,6 @@ def _publication_requires_full_rebuild(
         if abs(published_dhw_coeff - current_dhw) > 1e-12:
             return "calibration_changed"
 
-    # Migration from 0.3.0: that version did not persist a calibration
-    # fingerprint. It is safe to bootstrap the fingerprint if calibration was
-    # last updated before the already verified publication was requested.
     if published_co is None or published_dhw_coeff is None:
         calibration = runtime.data.get("calibration", {})
         calibration_updated = _as_datetime(calibration.get("updated_at"))
@@ -342,6 +492,7 @@ def _publication_requires_full_rebuild(
 def _publication_record(
     runtime,
     build: CanonicalBuild,
+    costs: CanonicalCostResult,
     *,
     mode: str,
     write_row_count: int,
@@ -350,6 +501,7 @@ def _publication_record(
     combined = build.combined.hours
     calibration = runtime.data.get("calibration", {})
     active_readings = runtime._readings()
+    billing_periods = runtime.data.get("billing_periods", [])
     heating_total_m3 = sum(max(0.0, float(hour.heating_m3)) for hour in combined)
     dhw_total_m3 = sum(max(0.0, float(hour.dhw_m3)) for hour in combined)
     unattributed_total_m3 = sum(
@@ -357,6 +509,10 @@ def _publication_record(
     )
     canonical_consumption_m3 = sum(max(0.0, float(hour.gas_m3)) for hour in combined)
     split_total_m3 = heating_total_m3 + dhw_total_m3
+    heating_cost_total = sum(hour.heating_pln for hour in costs.hours)
+    dhw_cost_total = sum(hour.dhw_pln for hour in costs.hours)
+    fixed_cost_total = sum(hour.fixed_pln for hour in costs.hours)
+    cost_split_total = heating_cost_total + dhw_cost_total + fixed_cost_total
     return {
         "status": "publishing",
         "mode": mode,
@@ -367,15 +523,44 @@ def _publication_record(
         "heating_statistic_id": CANONICAL_HEATING_STATISTIC_ID,
         "dhw_statistic_id": CANONICAL_DHW_STATISTIC_ID,
         "component_statistics_verified": False,
+        "fixed_cost_gas_statistic_id": CANONICAL_FIXED_COST_GAS_STATISTIC_ID,
+        "heating_cost_statistic_id": CANONICAL_HEATING_COST_STATISTIC_ID,
+        "dhw_cost_statistic_id": CANONICAL_DHW_COST_STATISTIC_ID,
+        "fixed_cost_statistic_id": CANONICAL_FIXED_COST_STATISTIC_ID,
+        "cost_statistics_verified": False,
+        "billing_period_fingerprint": billing_period_fingerprint(billing_periods),
+        "cost_conversion_factor_kwh_m3": runtime.conversion_factor,
+        "cost_gas_rate_net_pln_kwh": runtime.gas_rate_net,
+        "cost_distribution_variable_net_pln_kwh": runtime.dist_var_rate_net,
+        "cost_subscription_net_pln_month": runtime.subscription_net,
+        "cost_distribution_fixed_net_pln_month": runtime.dist_fixed_net,
+        "cost_vat_rate": runtime.vat,
         "canonical_consumption_m3": round(canonical_consumption_m3, 9),
         "heating_total_m3": round(heating_total_m3, 9),
         "dhw_total_m3": round(dhw_total_m3, 9),
         "unattributed_total_m3": round(unattributed_total_m3, 9),
         "split_total_m3": round(split_total_m3, 9),
         "split_closure_error_m3": round(split_total_m3 - canonical_consumption_m3, 9),
-        # row_count remains the total canonical series size for compatibility
-        # with the existing status sensor. write_row_count is the actual DB write
-        # per canonical statistic.
+        "cost_billing_period_count": costs.billing_period_count,
+        "cost_applied_invoice_count": costs.applied_invoice_count,
+        "cost_skipped_outside_history_count": costs.skipped_outside_history_count,
+        "cost_skipped_partial_history_count": costs.skipped_partial_history_count,
+        "cost_unpriced_historical_hour_count": costs.unpriced_historical_hour_count,
+        "cost_latest_applied_invoice_end": None
+        if costs.latest_applied_invoice_end is None
+        else costs.latest_applied_invoice_end.isoformat(),
+        "cost_invoiced_gross_pln": round(costs.invoiced_gross_pln, 6),
+        "cost_published_invoiced_pln": round(costs.published_invoiced_pln, 6),
+        "cost_invoiced_closure_error_pln": round(
+            costs.invoiced_closure_error_pln, 6
+        ),
+        "cost_provisional_pln": round(costs.provisional_pln, 6),
+        "cost_total_pln": round(costs.total_pln, 6),
+        "heating_cost_total_pln": round(heating_cost_total, 6),
+        "dhw_cost_total_pln": round(dhw_cost_total, 6),
+        "fixed_cost_total_pln": round(fixed_cost_total, 6),
+        "cost_split_total_pln": round(cost_split_total, 6),
+        "cost_split_closure_error_pln": round(cost_split_total - costs.total_pln, 6),
         "row_count": len(combined),
         "write_row_count": write_row_count,
         "settled_row_count": len(build.settled.hours),
@@ -419,6 +604,21 @@ async def _async_store_verified_publication(
     summary["publication_heating_statistic_id"] = CANONICAL_HEATING_STATISTIC_ID
     summary["publication_dhw_statistic_id"] = CANONICAL_DHW_STATISTIC_ID
     summary["publication_component_statistics_verified"] = True
+    summary["publication_fixed_cost_gas_statistic_id"] = (
+        CANONICAL_FIXED_COST_GAS_STATISTIC_ID
+    )
+    summary["publication_heating_cost_statistic_id"] = (
+        CANONICAL_HEATING_COST_STATISTIC_ID
+    )
+    summary["publication_dhw_cost_statistic_id"] = CANONICAL_DHW_COST_STATISTIC_ID
+    summary["publication_fixed_cost_statistic_id"] = CANONICAL_FIXED_COST_STATISTIC_ID
+    summary["publication_cost_statistics_verified"] = True
+    summary["publication_cost_invoiced_closure_error_pln"] = publication[
+        "cost_invoiced_closure_error_pln"
+    ]
+    summary["publication_cost_split_closure_error_pln"] = publication[
+        "cost_split_closure_error_pln"
+    ]
     summary["publication_row_count"] = publication["row_count"]
     summary["publication_write_row_count"] = publication["write_row_count"]
     summary["publication_mode"] = publication["mode"]
@@ -431,11 +631,30 @@ async def _async_store_verified_publication(
     return publication
 
 
-def _all_component_statistics(build: CanonicalBuild) -> tuple[list[StatisticData], list[StatisticData]]:
+def _all_component_statistics(
+    build: CanonicalBuild,
+) -> tuple[list[StatisticData], list[StatisticData]]:
     hours = build.combined.hours
     return (
         _component_statistics_from_hours(hours, "heating_m3"),
         _component_statistics_from_hours(hours, "dhw_m3"),
+    )
+
+
+def _all_cost_statistics(
+    build: CanonicalBuild,
+    costs: CanonicalCostResult,
+) -> tuple[
+    list[StatisticData],
+    list[StatisticData],
+    list[StatisticData],
+    list[StatisticData],
+]:
+    return (
+        _zero_volume_statistics(build.combined.hours),
+        _cost_statistics_from_result(costs, "heating_pln"),
+        _cost_statistics_from_result(costs, "dhw_pln"),
+        _cost_statistics_from_result(costs, "fixed_pln"),
     )
 
 
@@ -444,22 +663,51 @@ def _publish_statistics(
     gas_statistics: list[StatisticData],
     heating_statistics: list[StatisticData],
     dhw_statistics: list[StatisticData],
+    fixed_gas_statistics: list[StatisticData],
+    heating_cost_statistics: list[StatisticData],
+    dhw_cost_statistics: list[StatisticData],
+    fixed_cost_statistics: list[StatisticData],
 ) -> None:
-    """Queue all three canonical statistics from one coherent build."""
+    """Queue all canonical volume and cost statistics from one coherent build."""
+    async_add_external_statistics(runtime.hass, _volume_metadata(), gas_statistics)
     async_add_external_statistics(
         runtime.hass,
-        _metadata(),
-        gas_statistics,
-    )
-    async_add_external_statistics(
-        runtime.hass,
-        _metadata(CANONICAL_HEATING_STATISTIC_ID, "DUON Gaz — Ogrzewanie"),
+        _volume_metadata(CANONICAL_HEATING_STATISTIC_ID, "DUON Gaz — Ogrzewanie"),
         heating_statistics,
     )
     async_add_external_statistics(
         runtime.hass,
-        _metadata(CANONICAL_DHW_STATISTIC_ID, "DUON Gaz — Ciepła woda"),
+        _volume_metadata(CANONICAL_DHW_STATISTIC_ID, "DUON Gaz — Ciepła woda"),
         dhw_statistics,
+    )
+    async_add_external_statistics(
+        runtime.hass,
+        _volume_metadata(
+            CANONICAL_FIXED_COST_GAS_STATISTIC_ID,
+            "DUON Gaz — Koszt stały gazu",
+        ),
+        fixed_gas_statistics,
+    )
+    async_add_external_statistics(
+        runtime.hass,
+        _cost_metadata(
+            CANONICAL_HEATING_COST_STATISTIC_ID,
+            "DUON Gaz — Ogrzewanie koszt",
+        ),
+        heating_cost_statistics,
+    )
+    async_add_external_statistics(
+        runtime.hass,
+        _cost_metadata(
+            CANONICAL_DHW_COST_STATISTIC_ID,
+            "DUON Gaz — Ciepła woda koszt",
+        ),
+        dhw_cost_statistics,
+    )
+    async_add_external_statistics(
+        runtime.hass,
+        _cost_metadata(CANONICAL_FIXED_COST_STATISTIC_ID, "DUON Gaz — Koszt stały"),
+        fixed_cost_statistics,
     )
 
 
@@ -469,14 +717,22 @@ async def _async_publish_full_locked(
     *,
     reason: str,
 ) -> dict[str, Any]:
-    """Publish the complete settled + provisional canonical series."""
+    """Publish complete settled + provisional volume and cost series."""
     _validate_build(build)
+    costs = _build_costs(runtime, build)
     hours = build.combined.hours
     gas_statistics = _statistics_from_hours(hours)
     heating_statistics, dhw_statistics = _all_component_statistics(build)
+    (
+        fixed_gas_statistics,
+        heating_cost_statistics,
+        dhw_cost_statistics,
+        fixed_cost_statistics,
+    ) = _all_cost_statistics(build, costs)
     publication = _publication_record(
         runtime,
         build,
+        costs,
         mode="settled_plus_provisional",
         write_row_count=len(gas_statistics),
         reason=reason,
@@ -487,12 +743,20 @@ async def _async_publish_full_locked(
         gas_statistics,
         heating_statistics,
         dhw_statistics,
+        fixed_gas_statistics,
+        heating_cost_statistics,
+        dhw_cost_statistics,
+        fixed_cost_statistics,
     )
     verification = await _async_verify_publication(
         runtime,
         gas_statistics,
         heating_statistics,
         dhw_statistics,
+        fixed_gas_statistics,
+        heating_cost_statistics,
+        dhw_cost_statistics,
+        fixed_cost_statistics,
     )
     return await _async_store_verified_publication(
         runtime, build, publication, verification
@@ -500,7 +764,7 @@ async def _async_publish_full_locked(
 
 
 async def async_publish_canonical_statistics(runtime) -> dict[str, Any]:
-    """Rebuild, publish and verify the complete canonical gas series."""
+    """Rebuild, publish and verify complete canonical volume and cost series."""
     async with _publish_lock(runtime):
         build = await async_build_canonical_bundle(runtime)
         return await _async_publish_full_locked(
@@ -515,20 +779,13 @@ async def async_refresh_canonical_tail_statistics(
     *,
     reason: str = "manual_tail_refresh",
 ) -> dict[str, Any]:
-    """Refresh only the open provisional Recorder slice when safe.
-
-    The already settled history is left untouched. If a new physical anchor,
-    source entity, calibration change or canonical component publication means
-    historical rows can legitimately change, this function automatically falls
-    back to one full publication.
-    """
+    """Refresh the open tail and fall back to full publication when required."""
     async with _publish_lock(runtime):
         previous_publication = runtime.data.get("canonical_publication")
         if not (
             isinstance(previous_publication, dict)
             and previous_publication.get("verified", False)
-            and previous_publication.get("statistic_id")
-            == CANONICAL_GAS_STATISTIC_ID
+            and previous_publication.get("statistic_id") == CANONICAL_GAS_STATISTIC_ID
         ):
             return {
                 "status": "skipped",
@@ -558,8 +815,15 @@ async def async_refresh_canonical_tail_statistics(
                 "reason": "no_provisional_tail",
             }
 
+        costs = _build_costs(runtime, build)
         gas_statistics = _statistics_from_hours(refresh_hours)
         all_heating_statistics, all_dhw_statistics = _all_component_statistics(build)
+        (
+            all_fixed_gas_statistics,
+            all_heating_cost_statistics,
+            all_dhw_cost_statistics,
+            all_fixed_cost_statistics,
+        ) = _all_cost_statistics(build, costs)
         heating_statistics = _select_statistics_for_hours(
             all_heating_statistics,
             refresh_hours,
@@ -568,9 +832,26 @@ async def async_refresh_canonical_tail_statistics(
             all_dhw_statistics,
             refresh_hours,
         )
+        fixed_gas_statistics = _select_statistics_for_hours(
+            all_fixed_gas_statistics,
+            refresh_hours,
+        )
+        heating_cost_statistics = _select_statistics_for_hours(
+            all_heating_cost_statistics,
+            refresh_hours,
+        )
+        dhw_cost_statistics = _select_statistics_for_hours(
+            all_dhw_cost_statistics,
+            refresh_hours,
+        )
+        fixed_cost_statistics = _select_statistics_for_hours(
+            all_fixed_cost_statistics,
+            refresh_hours,
+        )
         publication = _publication_record(
             runtime,
             build,
+            costs,
             mode="provisional_tail_refresh",
             write_row_count=len(gas_statistics),
             reason=reason,
@@ -581,12 +862,20 @@ async def async_refresh_canonical_tail_statistics(
             gas_statistics,
             heating_statistics,
             dhw_statistics,
+            fixed_gas_statistics,
+            heating_cost_statistics,
+            dhw_cost_statistics,
+            fixed_cost_statistics,
         )
         verification = await _async_verify_publication(
             runtime,
             gas_statistics,
             heating_statistics,
             dhw_statistics,
+            fixed_gas_statistics,
+            heating_cost_statistics,
+            dhw_cost_statistics,
+            fixed_cost_statistics,
         )
         return await _async_store_verified_publication(
             runtime, build, publication, verification
