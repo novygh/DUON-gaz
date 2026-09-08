@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+import sys
 import unittest
 
-from custom_components.duon_gaz.invoice_parser import (
-    is_trusted_billing_reading,
-    parse_invoice_text,
+
+# Parser faktury jest czystym modułem Pythona. Ładujemy go bez importowania
+# pakietu integracji, aby test nie wymagał środowiska Home Assistanta.
+PARSER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "custom_components"
+    / "duon_gaz"
+    / "invoice_parser.py"
 )
+SPEC = importlib.util.spec_from_file_location("duon_gaz_invoice_parser_test", PARSER_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"Nie można załadować parsera faktur z {PARSER_PATH}")
+
+MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MODULE
+SPEC.loader.exec_module(MODULE)
+
+is_trusted_billing_reading = MODULE.is_trusted_billing_reading
+parse_invoice_text = MODULE.parse_invoice_text
 
 
 FAKTURA_TESTOWA = """
