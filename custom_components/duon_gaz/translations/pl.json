@@ -1,9 +1,6 @@
 {
   "title": "DUON Gaz",
   "config": {
-    "progress": {
-      "wait_for_microsoft": "Otwórz stronę Microsoft:\n\n{url}\n\ni wpisz kod:\n\n```{code}```\n\nZaloguj się do konta Outlook z fakturami DUON i zaakceptuj dostęp **Mail.Read**. Home Assistant automatycznie zakończy konfigurację po zatwierdzeniu."
-    },
     "step": {
       "user": {
         "title": "Konfiguracja DUON Gaz",
@@ -43,6 +40,10 @@
         "title": "Ponownie połącz Outlook",
         "description": "Microsoft wymaga ponownego zalogowania. Kontynuuj, aby otrzymać nowy kod urządzenia. Nie jest potrzebny żaden sekret klienta."
       },
+      "outlook_authorize": {
+        "title": "Zaloguj Outlook do DUON Gaz",
+        "description": "1. Otwórz stronę Microsoft: **[{url}]({url})**\n2. Wpisz kod: **`{code}`**\n3. Zaloguj się do konta Outlook z fakturami DUON i zaakceptuj dostęp **Mail.Read**.\n4. Po zakończeniu wróć tutaj i kliknij **Dalej**."
+      },
       "outlook_auth_error": {
         "title": "Nie udało się połączyć z Microsoft",
         "description": "Błąd logowania: `{error}`\n\nSprawdź ustawienia aplikacji Microsoft Entra. Powinna mieć delegowane **Mail.Read** i włączone publiczne przepływy klienta. Kliknij Wyślij, aby spróbować ponownie."
@@ -50,7 +51,8 @@
     },
     "error": {
       "same_entity": "Wybierz dwa różne sensory źródłowe.",
-      "required": "Pole jest wymagane."
+      "required": "Pole jest wymagane.",
+      "authorization_pending": "Microsoft nie potwierdził jeszcze logowania. Zaloguj się pod wskazanym adresem i ponownie kliknij Dalej."
     },
     "abort": {
       "single_instance_allowed": "DUON Gaz jest już skonfigurowany.",
