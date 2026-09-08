@@ -129,6 +129,8 @@ class ConversionAuditTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["sample_count"], 8)
         self.assertAlmostEqual(result["reference_factor_kwh_m3"], reference, delta=0.02)
+        # Ostatnia faktura ma zawyżony współczynnik, więc z perspektywy użytkownika
+        # wynik musi być ujemny.
         self.assertLess(result["last_difference_pln"], 0.0)
         self.assertLess(result["last_factor_difference_percent"], -4.5)
         self.assertGreater(result["last_factor_difference_percent"], -5.5)
@@ -155,7 +157,6 @@ class ConversionAuditTests(unittest.TestCase):
             for index in range(7)
         ]
 
-        # Zerwij dokładne dopasowanie jednej granicy faktury do ręcznego gazomierza.
         periods[-1]["current_reading"]["meter_m3"] += 5
 
         result = build_conversion_audit(
