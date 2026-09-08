@@ -1,7 +1,7 @@
 {
   "title": "DUON Gaz",
   "application_credentials": {
-    "description": "Utwórz własną aplikację Microsoft Entra do odczytu faktur z Outlooka:\n\n1. Otwórz [Rejestracje aplikacji]({app_registration_url}) i utwórz nową aplikację.\n2. Zezwól na konta Microsoft używane przez Twoją skrzynkę.\n3. Dodaj typ platformy **Web** i URI przekierowania `{redirect_url}`.\n4. W Microsoft Graph dodaj delegowane uprawnienia **Mail.Read** i **User.Read**. Szczegóły: [Mail.Read]({graph_permissions_url}).\n5. Utwórz sekret klienta.\n6. W Home Assistant wpisz identyfikator klienta i sekret jako poświadczenia aplikacji DUON Gaz.\n\nIntegracja żąda wyłącznie odczytu poczty; nie przenosi ani nie usuwa wiadomości."
+    "description": "Utwórz własną aplikację Microsoft Entra do odczytu faktur z Outlooka:\n\n1. Otwórz [Rejestracje aplikacji]({app_registration_url}) i utwórz nową aplikację.\n2. Zezwól na konta Microsoft używane przez Twoją skrzynkę.\n3. Dodaj typ platformy **Web** i URI przekierowania `{redirect_url}`.\n4. W Microsoft Graph dodaj delegowane uprawnienie **Mail.Read**. Szczegóły: [Mail.Read]({graph_permissions_url}).\n5. Utwórz sekret klienta.\n6. W Home Assistant wpisz identyfikator klienta i sekret jako poświadczenia aplikacji DUON Gaz.\n\nIntegracja żąda wyłącznie odczytu poczty; nie przenosi ani nie usuwa wiadomości."
   },
   "config": {
     "step": {
