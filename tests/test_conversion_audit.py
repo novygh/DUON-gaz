@@ -23,123 +23,182 @@ spec.loader.exec_module(conversion_audit)
 ConversionAuditError = conversion_audit.ConversionAuditError
 build_conversion_audit = conversion_audit.build_conversion_audit
 
-
 TZ = ZoneInfo("Europe/Warsaw")
 
 
-def _hours(start: datetime, period_days: int, mixes: list[tuple[float, float]]):
-    rows = []
-    current = start
-    for co_total, dhw_total in mixes:
-        count = period_days * 24
-        for _ in range(count):
-            rows.append(
-                SimpleNamespace(
-                    start=current,
-                    heating_kwh=co_total / count,
-                    dhw_kwh=dhw_total / count,
-                    quality=(),
-                )
-            )
-            current += timedelta(hours=1)
-    return rows
+def _manual(timestamp: datetime, meter: float):
+    return {
+        "timestamp": timestamp.isoformat(),
+        "meter_m3": meter,
+        "timestamp_precision": "exact",
+        "source": "manual",
+        "quality": {
+            "state": "good",
+            "exclude_from_estimation": False,
+        },
+    }
 
 
-def _periods(
+def _period(
+    number: str,
     start: datetime,
-    period_days: int,
-    mixes: list[tuple[float, float]],
-    *,
-    co_multiplier: float,
-    dhw_multiplier: float,
-    last_extra_kwh: float = 0.0,
+    end: datetime,
+    previous_meter: float,
+    current_meter: float,
+    factor: float,
 ):
-    result = []
-    cursor = start.date()
-    for index, (co_kwh, dhw_kwh) in enumerate(mixes):
-        next_day = cursor + timedelta(days=period_days)
-        billed = co_multiplier * co_kwh + dhw_multiplier * dhw_kwh
-        if index == len(mixes) - 1:
-            billed += last_extra_kwh
-        consumption = 10.0 + index
-        result.append(
-            {
-                "invoice_number": f"TEST-{index + 1}",
-                "period_start": cursor.isoformat(),
-                "period_end": (next_day - timedelta(days=1)).isoformat(),
-                "previous_reading": {"date": cursor.isoformat()},
-                "current_reading": {"date": next_day.isoformat()},
-                "consumption_m3": consumption,
-                "billed_energy_kwh": billed,
-                "conversion_factor_kwh_m3": billed / consumption,
-                "gas_rate_net_pln_kwh": 0.20,
-                "distribution_variable_net_pln_kwh": 0.05,
-                "vat_rate": 0.23,
-            }
-        )
-        cursor = next_day
-    return result
+    consumption = current_meter - previous_meter
+    return {
+        "invoice_number": number,
+        "previous_reading": {
+            "date": start.date().isoformat(),
+            "meter_m3": round(previous_meter),
+        },
+        "current_reading": {
+            "date": end.date().isoformat(),
+            "meter_m3": round(current_meter),
+        },
+        "consumption_m3": round(current_meter) - round(previous_meter),
+        "conversion_factor_kwh_m3": factor,
+        "billed_energy_kwh": consumption * factor,
+        "gas_rate_net_pln_kwh": 0.20,
+        "distribution_variable_net_pln_kwh": 0.05,
+        "vat_rate": 0.23,
+    }
+
+
+def _interval(start: datetime, end: datetime, physical_m3: float, yield_ratio: float):
+    return SimpleNamespace(
+        start=start,
+        end=end,
+        physical_delta_m3=physical_m3,
+        provisional_m3=physical_m3 * yield_ratio,
+        reconstructed_gap_hours=0,
+        unresolved_rollback_kwh=0.0,
+        quality=("normalized_to_meter",),
+    )
 
 
 class ConversionAuditTests(unittest.TestCase):
-    def test_model_kroczacy_nie_uczy_sie_na_ocenianej_fakturze(self):
-        start = datetime(2026, 1, 1, 12, tzinfo=TZ)
-        mixes = [
-            (120.0, 20.0),
-            (100.0, 35.0),
-            (80.0, 50.0),
-            (60.0, 65.0),
-            (40.0, 80.0),
-            (90.0, 30.0),
-            (70.0, 55.0),
-            (50.0, 75.0),
-        ]
-        hours = _hours(start, 10, mixes)
-        periods = _periods(
-            start,
-            10,
-            mixes,
-            co_multiplier=1.10,
-            dhw_multiplier=1.25,
-            last_extra_kwh=20.0,
-        )
+    def test_dokladne_reczne_granice_usuwaja_sztuczne_poludnie(self):
+        start = datetime(2026, 1, 3, 18, 17, tzinfo=TZ)
+        manuals = []
+        intervals = []
+        periods = []
+        meter = 1000.2
+        reference = 11.40
+        ratios = [1.00, 1.01, 0.99, 1.02, 0.98, 1.00, 1.01, 1.00]
 
-        result = build_conversion_audit(hours, periods, timezone=TZ).data
+        points = [start + timedelta(days=30 * index) for index in range(9)]
+        meters = [meter]
+        for _index in range(8):
+            meter += 40.0
+            meters.append(meter)
+
+        for timestamp, value in zip(points, meters, strict=True):
+            manuals.append(_manual(timestamp, value))
+
+        for index, ratio in enumerate(ratios):
+            intervals.append(
+                _interval(points[index], points[index + 1], 40.0, ratio)
+            )
+            factor = reference * ratio
+            if index == len(ratios) - 1:
+                factor *= 1.05
+            periods.append(
+                _period(
+                    f"TEST-{index + 1}",
+                    points[index],
+                    points[index + 1],
+                    meters[index],
+                    meters[index + 1],
+                    factor,
+                )
+            )
+
+        result = build_conversion_audit(
+            intervals,
+            periods,
+            manuals,
+            timezone=TZ,
+            calibration_co_m3_per_kwh=0.10,
+            calibration_dhw_m3_per_kwh=0.11,
+            calibration_mae_m3=0.5,
+        ).data
 
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(
-            result["method"],
-            "walk_forward_robust_two_component_local_energy_model",
-        )
         self.assertEqual(result["sample_count"], 8)
-        self.assertEqual(result["baseline_sample_count"], 6)
-        self.assertEqual(result["evaluated_count"], 2)
+        self.assertAlmostEqual(result["reference_factor_kwh_m3"], reference, delta=0.02)
         self.assertGreater(result["last_difference_pln"], 0.0)
-        self.assertGreater(result["last_factor_difference_percent"], 0.0)
-        self.assertAlmostEqual(
-            result["model_co_billed_kwh_per_ariston_kwh"], 1.10, delta=0.08
-        )
-        self.assertAlmostEqual(
-            result["model_dhw_billed_kwh_per_ariston_kwh"], 1.25, delta=0.08
-        )
-        self.assertEqual(len(result["history"]), 2)
-        self.assertAlmostEqual(result["history"][0]["difference_pln"], 0.0, delta=1e-6)
-        self.assertGreater(result["history"][1]["difference_pln"], 0.0)
+        self.assertGreater(result["last_factor_difference_percent"], 4.5)
+        self.assertLess(result["last_factor_difference_percent"], 5.5)
+        self.assertEqual(len(result["history"]), 8)
+        self.assertEqual(result["skipped_without_exact_manual_bounds_count"], 0)
 
-    def test_za_malo_okresow_nie_udaje_wiarygodnego_modelu(self):
-        start = datetime(2026, 1, 1, 12, tzinfo=TZ)
-        mixes = [(100.0, 20.0)] * 5
-        hours = _hours(start, 10, mixes)
-        periods = _periods(
-            start,
-            10,
-            mixes,
-            co_multiplier=1.10,
-            dhw_multiplier=1.25,
-        )
+    def test_faktura_bez_dwoch_dokladnych_granic_jest_pominieta(self):
+        start = datetime(2026, 1, 3, 18, 17, tzinfo=TZ)
+        points = [start + timedelta(days=30 * index) for index in range(8)]
+        manuals = [_manual(timestamp, 1000.2 + 40 * index) for index, timestamp in enumerate(points)]
+        intervals = [
+            _interval(points[index], points[index + 1], 40.0, 1.0)
+            for index in range(7)
+        ]
+        periods = [
+            _period(
+                f"TEST-{index + 1}",
+                points[index],
+                points[index + 1],
+                1000.2 + 40 * index,
+                1000.2 + 40 * (index + 1),
+                11.40,
+            )
+            for index in range(7)
+        ]
+
+        # Zerwij dokładne dopasowanie jednej granicy faktury do ręcznego gazomierza.
+        periods[-1]["current_reading"]["meter_m3"] += 5
+
+        result = build_conversion_audit(
+            intervals,
+            periods,
+            manuals,
+            timezone=TZ,
+            calibration_co_m3_per_kwh=0.10,
+            calibration_dhw_m3_per_kwh=0.11,
+        ).data
+
+        self.assertEqual(result["sample_count"], 6)
+        self.assertEqual(result["skipped_without_exact_manual_bounds_count"], 1)
+
+    def test_za_malo_dokladnych_okresow_nie_tworz_referencji(self):
+        start = datetime(2026, 1, 3, 18, 17, tzinfo=TZ)
+        points = [start + timedelta(days=30 * index) for index in range(6)]
+        manuals = [_manual(timestamp, 1000.2 + 40 * index) for index, timestamp in enumerate(points)]
+        intervals = [
+            _interval(points[index], points[index + 1], 40.0, 1.0)
+            for index in range(5)
+        ]
+        periods = [
+            _period(
+                f"TEST-{index + 1}",
+                points[index],
+                points[index + 1],
+                1000.2 + 40 * index,
+                1000.2 + 40 * (index + 1),
+                11.40,
+            )
+            for index in range(5)
+        ]
 
         with self.assertRaises(ConversionAuditError):
-            build_conversion_audit(hours, periods, timezone=TZ)
+            build_conversion_audit(
+                intervals,
+                periods,
+                manuals,
+                timezone=TZ,
+                calibration_co_m3_per_kwh=0.10,
+                calibration_dhw_m3_per_kwh=0.11,
+            )
 
 
 if __name__ == "__main__":
