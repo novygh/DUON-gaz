@@ -9,6 +9,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfVolume
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -17,6 +18,7 @@ from .canonical_builder import async_build_canonical_bundle
 from .canonical_costs import billing_period_fingerprint
 from .const import DOMAIN
 from .conversion_audit import ConversionAuditError, build_conversion_audit
+from .conversion_audit_history import publish_audit_statistics
 from .publication_rules import active_anchor_fingerprint
 from .runtime import DuonGazRuntime
 
@@ -255,6 +257,8 @@ class DuonConversionAuditSensor(DuonBaseSensor):
         self._audit_fingerprint = None
         self._audit_unsub = None
         self._audit_task = None
+        self._audit_history_rows = 0
+        self._audit_history_error: str | None = None
 
     def _current_audit_fingerprint(self):
         return (
@@ -291,6 +295,17 @@ class DuonConversionAuditSensor(DuonBaseSensor):
                 calibration_mae_m3=calibration.get("mae_m3"),
             )
             self._audit = result.data
+            self._audit_history_rows = 0
+            self._audit_history_error = None
+            if self.entity_id:
+                try:
+                    self._audit_history_rows = publish_audit_statistics(
+                        self.hass,
+                        self.entity_id,
+                        self._audit,
+                    )
+                except (HomeAssistantError, TypeError, ValueError, RuntimeError) as err:
+                    self._audit_history_error = str(err)
         except (ConversionAuditError, ValueError, RuntimeError) as err:
             self._audit = {
                 "status": "unavailable",
@@ -402,6 +417,8 @@ class DuonConversionAuditSensor(DuonBaseSensor):
                 "skipped_without_exact_manual_bounds_count"
             ),
             "pominiete_nieprawidlowe": self._audit.get("skipped_invalid_count"),
+            "historia_recorder_punkty": self._audit_history_rows,
+            "historia_recorder_blad": self._audit_history_error,
             "historia": history,
         }
 
