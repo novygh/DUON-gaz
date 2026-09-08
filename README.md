@@ -4,7 +4,7 @@ Niestandardowa integracja dla Home Assistanta do rekonstrukcji i bieżącego śl
 
 ## Aktualny stan projektu
 
-Aktualna wersja rozwojowa: **0.3.1**.
+Aktualna wersja rozwojowa: **0.3.2**.
 
 Prace nad linią 0.3.x są prowadzone na gałęzi:
 
@@ -16,12 +16,13 @@ oraz w roboczym PR #1.
 
 Gałąź `main` nadal zawiera starszą wersję kodu do czasu zakończenia testów i scalenia bieżących zmian.
 
-## Co potrafi wersja 0.3.1
+## Co potrafi wersja 0.3.2
 
 - wybiera dowolne dwa sensory Home Assistanta jako źródła CO i CWU,
 - korzysta ze skumulowanych statystyk `sum` z Recorder,
 - zapisuje dokładne fizyczne odczyty gazomierza,
 - osobno kalibruje CO i CWU w m³/kWh,
+- używa neutralnej kalibracji startowej 0,1 m³/kWh tylko do czasu wyuczenia współczynników dla konkretnej instalacji,
 - rekonstruuje brakujące godziny,
 - obsługuje ujemne korekty/rollbacki źródła bez tworzenia ujemnego zużycia,
 - dokładnie domyka rozliczone okresy do fizycznego gazomierza,
@@ -33,13 +34,15 @@ duon_gaz:canonical_gas
 ```
 
 - automatycznie odświeża bieżący ogon po wygenerowaniu nowych godzinowych statystyk Recorder,
+- pozwala później zmienić sensory źródłowe i parametry rozliczeniowe przez **Konfiguruj**,
+- nie zawiera instalacyjnych wartości domyślnych taryf,
 - nie modyfikuje surowych statystyk źródłowych CO/CWU.
 
 ## Wymagania
 
 - Home Assistant z włączonym Recorder,
 - dwa sensory źródłowe CO/CWU posiadające statystyki `sum`,
-- co najmniej dwa zaufane odczyty gazomierza do pełnej rekonstrukcji i kalibracji.
+- fizyczne lub zaufane odczyty gazomierza do rozliczania i uczenia kalibracji.
 
 Jeżeli `recorder:` korzysta z `include:`, wybrane sensory CO i CWU muszą znajdować się na liście dozwolonych encji.
 
@@ -88,6 +91,5 @@ DUON Gaz korzysta z interfejsów Home Assistant Recorder. Nie zapisuje bezpośre
 - automatyczne pobieranie faktur z Outlook/Microsoft Graph,
 - pełna obsługa zaszyfrowanych faktur PDF,
 - przygotowanie/wysyłanie SMS,
-- usunięcie instalacyjnych wartości startowych kalibracji i taryf,
 - finalna migracja konfiguracji Energy Dashboard,
 - scalenie linii 0.3.x do `main` i stabilne wydanie HACS.
