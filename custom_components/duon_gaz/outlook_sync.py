@@ -22,7 +22,7 @@ from .invoice_import import async_import_invoice
 from .invoice_parser import DuonInvoiceParseError, parse_invoice_pdf_bytes
 
 # Zwiększamy przy świadomej zmianie reguł rozpoznawania układu faktury.
-_INVOICE_PARSER_VERSION = 2
+_INVOICE_PARSER_VERSION = 3
 
 
 def _processed_message_ids(items: Any) -> set[str]:
