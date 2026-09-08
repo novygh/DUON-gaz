@@ -4,9 +4,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from io import BytesIO
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, BinaryIO
 
 
 class DuonInvoiceParseError(ValueError):
@@ -94,14 +95,14 @@ def _one(pattern: str, text: str, field: str, flags: int = 0) -> re.Match[str]:
     return match
 
 
-def extract_invoice_text(path: str | Path, password: str) -> str:
+def _extract_invoice_text_from_reader(source: str | Path | BinaryIO, password: str) -> str:
     """Odszyfruj fakturę DUON i pobierz tekst bez użycia OCR."""
     try:
         from pypdf import PdfReader
     except ImportError as err:
         raise DuonInvoiceParseError("Brak biblioteki pypdf do odczytu faktur.") from err
 
-    reader = PdfReader(str(path))
+    reader = PdfReader(source)
     if reader.is_encrypted:
         result = reader.decrypt(password)
         if result == 0:
@@ -111,6 +112,16 @@ def extract_invoice_text(path: str | Path, password: str) -> str:
     if "Faktura VAT nr" not in text or "DUON Dystrybucja" not in text:
         raise DuonInvoiceParseError("PDF nie wygląda jak faktura DUON Dystrybucja.")
     return text
+
+
+def extract_invoice_text(path: str | Path, password: str) -> str:
+    """Odszyfruj fakturę DUON z pliku i pobierz jej tekst."""
+    return _extract_invoice_text_from_reader(str(path), password)
+
+
+def extract_invoice_text_from_bytes(content: bytes, password: str) -> str:
+    """Odszyfruj fakturę DUON pobraną do pamięci i pobierz jej tekst."""
+    return _extract_invoice_text_from_reader(BytesIO(content), password)
 
 
 def parse_invoice_text(text: str) -> DuonInvoice:
@@ -244,5 +255,10 @@ def parse_invoice_text(text: str) -> DuonInvoice:
 
 
 def parse_invoice_pdf(path: str | Path, password: str) -> DuonInvoice:
-    """Odszyfruj i przetwórz jedną fakturę PDF DUON."""
+    """Odszyfruj i przetwórz jedną fakturę PDF DUON z pliku."""
     return parse_invoice_text(extract_invoice_text(path, password))
+
+
+def parse_invoice_pdf_bytes(content: bytes, password: str) -> DuonInvoice:
+    """Odszyfruj i przetwórz jedną fakturę PDF DUON pobraną z Outlooka."""
+    return parse_invoice_text(extract_invoice_text_from_bytes(content, password))
