@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def _processed_invoice_numbers(items: Any) -> set[str]:
-    """Zwróć numery faktur już zapisanych w magazynie danych."""
+    """Zwróć numery faktur już zapisanych w magazynie danych integracji."""
     if not isinstance(items, list):
         return set()
 
@@ -99,7 +99,10 @@ async def async_import_invoice(
             invoice_id=invoice.invoice_number,
             timestamp_precision="day",
             meter_precision_m3=1.0,
-            exclude_from_calibration=False,
+            # Faktura podaje tylko dzień odczytu. Taka kotwica może domykać
+            # historię fizyczną, ale nie może kalibrować CO/CWU względem
+            # godzinowych statystyk Recorder, bo dokładny czas jest nieznany.
+            exclude_from_calibration=True,
         )
 
     runtime.data.setdefault("billing_periods", []).append(
