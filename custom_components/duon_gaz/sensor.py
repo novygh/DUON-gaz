@@ -361,11 +361,11 @@ class DuonConversionAuditSensor(DuonBaseSensor):
             "informacyjny": True,
             "uzywany_do_rozliczen": False,
             "interpretacja": (
-                "Wartość dodatnia oznacza korzyść użytkownika: współczynnik DUON "
-                "dał niższy koszt zmienny niż wynika z historycznej relacji lokalnego "
-                "profilu Ariston do gazomierza; wartość ujemna oznacza koszt wyższy. "
-                "Audyt wykrywa dryf względem własnej historii. Nie mierzy bezwzględnego "
-                "ciepła spalania i nie jest dowodem nieprawidłowego rozliczenia."
+                "Wartość dodatnia oznacza korzyść użytkownika względem lokalnej "
+                "referencji Ariston + gazomierz; wartość ujemna oznacza koszt wyższy "
+                "niż lokalna referencja. Audyt wykrywa dryf względem własnej historii. "
+                "Nie mierzy bezwzględnego ciepła spalania i nie jest dowodem "
+                "nieprawidłowego rozliczenia."
             ),
             "metoda": self._audit.get("method"),
             "liczba_okresow": self._audit.get("sample_count"),
