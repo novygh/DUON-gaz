@@ -25,6 +25,19 @@ def calibration_readings(
     ]
 
 
+def historical_invoice_without_recorder_allowed(
+    *,
+    exclude_from_calibration: bool,
+    has_following_anchor: bool,
+) -> bool:
+    """Dopuść brak Recorder tylko dla bezpiecznie domkniętej kotwicy historycznej.
+
+    Kotwica musi być wykluczona z kalibracji i mieć późniejszą zaufaną kotwicę,
+    dzięki czemu nie stanie się bazą bieżącego ogona estymacji.
+    """
+    return bool(exclude_from_calibration and has_following_anchor)
+
+
 def migrate_invoice_calibration_flags(data: dict[str, Any]) -> bool:
     """Wyklucz istniejące kotwice fakturowe z kalibracji.
 
