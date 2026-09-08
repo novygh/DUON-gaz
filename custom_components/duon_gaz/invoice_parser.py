@@ -95,6 +95,36 @@ def _one(pattern: str, text: str, field: str, flags: int = 0) -> re.Match[str]:
     return match
 
 
+def _many(pattern: str, text: str, field: str, flags: int = 0) -> list[re.Match[str]]:
+    matches = list(re.finditer(pattern, text, flags))
+    if not matches:
+        raise DuonInvoiceParseError(f"Nie znaleziono pola faktury: {field}")
+    return matches
+
+
+def _weighted_rate(
+    rows: list[re.Match[str]],
+    *,
+    weight_group: str,
+    rate_group: str,
+    field: str,
+) -> float:
+    """Zwróć efektywną stawkę jednostkową dla jednej lub wielu pozycji."""
+    total_weight = 0.0
+    weighted_sum = 0.0
+    for row in rows:
+        weight = _number(row.group(weight_group))
+        rate = _number(row.group(rate_group))
+        if weight < 0:
+            raise DuonInvoiceParseError(f"Ujemna podstawa stawki: {field}")
+        total_weight += weight
+        weighted_sum += weight * rate
+
+    if total_weight <= 0:
+        raise DuonInvoiceParseError(f"Zerowa podstawa stawki: {field}")
+    return weighted_sum / total_weight
+
+
 def _extract_invoice_text_from_reader(source: str | Path | BinaryIO, password: str) -> str:
     """Odszyfruj fakturę DUON i pobierz tekst bez użycia OCR."""
     try:
@@ -120,12 +150,12 @@ def extract_invoice_text(path: str | Path, password: str) -> str:
 
 
 def extract_invoice_text_from_bytes(content: bytes, password: str) -> str:
-    """Odszyfruj fakturę DUON pobraną do pamięci i pobierz jej tekst."""
+    """Odszyfruj fakturę DUON pobraną do pamięci i pobierz tekst."""
     return _extract_invoice_text_from_reader(BytesIO(content), password)
 
 
 def parse_invoice_text(text: str) -> DuonInvoice:
-    """Przetwórz tekst z aktualnego układu faktury DUON."""
+    """Przetwórz tekst z obsługiwanych układów faktury DUON."""
     invoice_number = _one(
         r"Faktura VAT nr\s+(\d+)", text, "invoice_number"
     ).group(1)
@@ -168,28 +198,31 @@ def parse_invoice_text(text: str) -> DuonInvoice:
         re.DOTALL,
     )
 
-    gas = _one(
-        r"Należność za gaz E\s*\(\s*([\d.,]+)\s*KWH/M3\s*\*\s*"
-        r"([\d.,]+)\s*M3\s*\)\s*([\d.,]+)\s*KWH\s*([\d.,]+)",
+    gas_rows = _many(
+        r"Należność za gaz E\s*\(\s*(?P<factor>[\d.,]+)\s*KWH/M3\s*\*\s*"
+        r"(?P<m3>[\d.,]+)\s*M3\s*\)\s*(?P<kwh>[\d.,]+)\s*KWH\s*"
+        r"(?P<rate>[\d.,]+)",
         text,
         "gas_charge",
         re.IGNORECASE,
     )
-    subscription = _one(
-        r"Opłata abonamentowa\s*-\s*gaz\s+\d+\s+SZT\s+([\d.,]+)",
+    subscription_rows = _many(
+        r"Opłata abonamentowa\s*-\s*gaz\s+(?P<quantity>[\d.,]+)\s+SZT\s+"
+        r"(?P<rate>[\d.,]+)",
         text,
         "subscription_rate",
         re.IGNORECASE,
     )
-    fixed = _one(
-        r"Opłata dystrybucyjna stała\s*-\s*gaz\s+\d+\s+SZT\s+([\d.,]+)",
+    fixed_rows = _many(
+        r"Opłata dystrybucyjna stała\s*-\s*gaz\s+(?P<quantity>[\d.,]+)\s+SZT\s+"
+        r"(?P<rate>[\d.,]+)",
         text,
         "distribution_fixed_rate",
         re.IGNORECASE,
     )
-    variable = _one(
-        r"Opłata dystrybucyjna zmienna\s*\([^\n]+\)\s*\d+\s*KWH\s+"
-        r"([\d.,]+)",
+    variable_rows = _many(
+        r"Opłata dystrybucyjna zmienna\s*\([^\n]+\)\s*"
+        r"(?P<kwh>[\d.,]+)\s*KWH\s+(?P<rate>[\d.,]+)",
         text,
         "distribution_variable_rate",
         re.IGNORECASE,
@@ -213,9 +246,42 @@ def parse_invoice_text(text: str) -> DuonInvoice:
         meter_m3=_number(row.group("curr_meter")),
     )
     consumption = _number(row.group("consumption"))
-    factor = _number(gas.group(1))
-    charge_m3 = _number(gas.group(2))
-    billed_kwh = _number(gas.group(3))
+
+    gas_m3 = [_number(item.group("m3")) for item in gas_rows]
+    gas_kwh = [_number(item.group("kwh")) for item in gas_rows]
+    charge_m3 = sum(gas_m3)
+    billed_kwh = sum(gas_kwh)
+    if charge_m3 <= 0:
+        raise DuonInvoiceParseError("Zerowe zużycie w pozycjach gazowych faktury.")
+    factor = sum(
+        _number(item.group("factor")) * m3
+        for item, m3 in zip(gas_rows, gas_m3, strict=True)
+    ) / charge_m3
+    gas_rate = _weighted_rate(
+        gas_rows,
+        weight_group="kwh",
+        rate_group="rate",
+        field="gas_rate",
+    )
+    subscription_rate = _weighted_rate(
+        subscription_rows,
+        weight_group="quantity",
+        rate_group="rate",
+        field="subscription_rate",
+    )
+    fixed_rate = _weighted_rate(
+        fixed_rows,
+        weight_group="quantity",
+        rate_group="rate",
+        field="distribution_fixed_rate",
+    )
+    variable_rate = _weighted_rate(
+        variable_rows,
+        weight_group="kwh",
+        rate_group="rate",
+        field="distribution_variable_rate",
+    )
+    variable_kwh = sum(_number(item.group("kwh")) for item in variable_rows)
 
     if abs((current.meter_m3 - previous.meter_m3) - consumption) > 0.01:
         raise DuonInvoiceParseError(
@@ -223,12 +289,16 @@ def parse_invoice_text(text: str) -> DuonInvoice:
         )
     if abs(charge_m3 - consumption) > 0.01:
         raise DuonInvoiceParseError(
-            "Zużycie w pozycji gazowej nie zgadza się z tabelą odczytów."
+            "Zużycie w pozycjach gazowych nie zgadza się z tabelą odczytów."
         )
     expected_kwh = factor * consumption
     if abs(billed_kwh - round(expected_kwh)) > 1.01:
         raise DuonInvoiceParseError(
             "Energia rozliczeniowa nie zgadza się ze współczynnikiem konwersji."
+        )
+    if abs(variable_kwh - billed_kwh) > 0.01:
+        raise DuonInvoiceParseError(
+            "Energia w opłacie dystrybucyjnej zmiennej nie zgadza się z pozycją gazową."
         )
 
     return DuonInvoice(
@@ -243,10 +313,10 @@ def parse_invoice_text(text: str) -> DuonInvoice:
         consumption_m3=consumption,
         conversion_factor_kwh_m3=factor,
         billed_energy_kwh=billed_kwh,
-        gas_rate_net_pln_kwh=_number(gas.group(4)),
-        subscription_net_pln=_number(subscription.group(1)),
-        distribution_fixed_net_pln=_number(fixed.group(1)),
-        distribution_variable_net_pln_kwh=_number(variable.group(1)),
+        gas_rate_net_pln_kwh=gas_rate,
+        subscription_net_pln=subscription_rate,
+        distribution_fixed_net_pln=fixed_rate,
+        distribution_variable_net_pln_kwh=variable_rate,
         vat_rate=_number(totals.group(4)) / 100.0,
         net_total_pln=_number(totals.group(1)),
         vat_total_pln=_number(totals.group(2)),
