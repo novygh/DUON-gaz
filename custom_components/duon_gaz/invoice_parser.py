@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 import re
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 
 
 class DuonInvoiceParseError(ValueError):
@@ -88,6 +88,20 @@ def _number(value: str) -> float:
         ) from err
 
 
+def _kwh_number(value: str) -> float:
+    """Odczytaj ilość kWh z polskim separatorem dziesiętnym lub tysięcy.
+
+    W tekstach PDF DUON wartości energii całkowitej mogą występować jako
+    ``1.500`` KWH, gdzie kropka jest separatorem tysięcy. Nie stosujemy tej
+    reguły do stawek jednostkowych, aby nie zmieniać znaczenia liczb
+    dziesiętnych zapisywanych z kropką w danych testowych.
+    """
+    normalized = value.strip().replace("\xa0", "").replace(" ", "")
+    if "," not in normalized and re.fullmatch(r"\d{1,3}(?:\.\d{3})+", normalized):
+        return _number(normalized.replace(".", ""))
+    return _number(value)
+
+
 def _one(pattern: str, text: str, field: str, flags: int = 0) -> re.Match[str]:
     match = re.search(pattern, text, flags)
     if match is None:
@@ -108,12 +122,13 @@ def _weighted_rate(
     weight_group: str,
     rate_group: str,
     field: str,
+    weight_parser: Callable[[str], float] = _number,
 ) -> float:
     """Zwróć efektywną stawkę jednostkową dla jednej lub wielu pozycji."""
     total_weight = 0.0
     weighted_sum = 0.0
     for row in rows:
-        weight = _number(row.group(weight_group))
+        weight = weight_parser(row.group(weight_group))
         rate = _number(row.group(rate_group))
         if weight < 0:
             raise DuonInvoiceParseError(f"Ujemna podstawa stawki: {field}")
@@ -248,7 +263,7 @@ def parse_invoice_text(text: str) -> DuonInvoice:
     consumption = _number(row.group("consumption"))
 
     gas_m3 = [_number(item.group("m3")) for item in gas_rows]
-    gas_kwh = [_number(item.group("kwh")) for item in gas_rows]
+    gas_kwh = [_kwh_number(item.group("kwh")) for item in gas_rows]
     gas_factors = [_number(item.group("factor")) for item in gas_rows]
     charge_m3 = sum(gas_m3)
     billed_kwh = sum(gas_kwh)
@@ -264,6 +279,7 @@ def parse_invoice_text(text: str) -> DuonInvoice:
         weight_group="kwh",
         rate_group="rate",
         field="gas_rate",
+        weight_parser=_kwh_number,
     )
     subscription_rate = _weighted_rate(
         subscription_rows,
@@ -282,8 +298,9 @@ def parse_invoice_text(text: str) -> DuonInvoice:
         weight_group="kwh",
         rate_group="rate",
         field="distribution_variable_rate",
+        weight_parser=_kwh_number,
     )
-    variable_kwh = sum(_number(item.group("kwh")) for item in variable_rows)
+    variable_kwh = sum(_kwh_number(item.group("kwh")) for item in variable_rows)
 
     if abs((current.meter_m3 - previous.meter_m3) - consumption) > 0.01:
         raise DuonInvoiceParseError(
