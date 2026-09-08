@@ -13,6 +13,16 @@ CONF_SUBSCRIPTION_NET = "subscription_net"
 CONF_DIST_FIXED_NET = "dist_fixed_net"
 CONF_VAT = "vat"
 
+CONF_OUTLOOK_FOLDER = "outlook_folder"
+CONF_OUTLOOK_SENDER = "outlook_sender"
+CONF_OUTLOOK_SUBJECT = "outlook_subject"
+CONF_INVOICE_PDF_PASSWORD = "invoice_pdf_password"
+CONF_OUTLOOK_CHECK_HOUR = "outlook_check_hour"
+
+DEFAULT_OUTLOOK_SENDER = "efaktura@duondstpl.nazwa.pl"
+DEFAULT_OUTLOOK_SUBJECT = "Duon e-faktura"
+DEFAULT_OUTLOOK_CHECK_HOUR = 20
+
 # Neutralny punkt startowy kalibracji fizycznej. Nie pochodzi z żadnej
 # konkretnej instalacji, kotła ani faktury. Po zebraniu wystarczającej liczby
 # kotwic gazomierza jest zastępowany kalibracją wyuczoną dla danej instalacji.
