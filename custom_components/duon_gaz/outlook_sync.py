@@ -76,6 +76,13 @@ def _message_audit_record(message: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safe_commit_error(err: Exception) -> str:
+    """Zwróć bezpieczny opis błędu zatwierdzania bez ryzyka ujawnienia sekretów."""
+    if isinstance(err, (DuonInvoiceParseError, OSError, ValueError, RuntimeError)):
+        return str(err)[:500]
+    return f"Nieoczekiwany błąd zatwierdzania paczki: {type(err).__name__}"
+
+
 class DuonOutlookSynchronizer:
     """Pobieraj i importuj nowe faktury z Outlooka bez zapisu sekretów w logach."""
 
@@ -284,9 +291,9 @@ class DuonOutlookSynchronizer:
 
                 staged.append((message, attachment, invoice))
 
-        # Faza 2: commit. Preflight wszystkich nowych zaszyfrowanych PDF-ów
-        # zakończył się poprawnie. Na dodatkową ochronę zachowujemy pełną kopię
-        # Store i przy błędzie zapisu cofamy całą paczkę.
+        # Faza 2: etapowanie w pamięci. Po preflight żadna pojedyncza faktura
+        # nie zapisuje Store. Cała paczka zostanie utrwalona dopiero jednym
+        # atomowym zapisem po pomyślnym przejściu wszystkich importów.
         before_commit = deepcopy(self.runtime.data)
         imported = 0
         duplicates = 0
@@ -300,6 +307,7 @@ class DuonOutlookSynchronizer:
                     invoice,
                     source_message_id=message_id,
                     source_attachment_name=attachment.name,
+                    persist=False,
                 )
                 if result.get("status") == "duplicate":
                     duplicates += 1
@@ -307,9 +315,26 @@ class DuonOutlookSynchronizer:
                     imported += 1
                 if result.get("anchor_added", False):
                     anchors_added += 1
-        except (DuonInvoiceParseError, OSError, ValueError, RuntimeError) as err:
+
+            processed_items = self.runtime.data.setdefault("processed_messages", [])
+            for message in messages_to_mark:
+                message_id = str(message.get("id") or "")
+                if message_id and message_id not in processed_ids:
+                    processed_items.append(_message_audit_record(message))
+                    processed_ids.add(message_id)
+
+            self.runtime.data["invoice_import_guard"] = {
+                "status": "ok",
+                "checked_at": dt_util.utcnow().isoformat(),
+                "parser_version": _INVOICE_PARSER_VERSION,
+                "validated_encrypted_pdfs": len(staged),
+                "ignored_unprotected_pdfs": ignored_unprotected_pdfs,
+            }
+        except asyncio.CancelledError:
             self.runtime.data = before_commit
-            await self.runtime.async_save()
+            raise
+        except Exception as err:  # noqa: BLE001 - rollback obejmuje także nieznane błędy
+            self.runtime.data = before_commit
             return await self._block_import(
                 reason=reason,
                 started_at=started_at,
@@ -319,24 +344,31 @@ class DuonOutlookSynchronizer:
                 pdf_count=pdf_count,
                 ignored_unprotected_pdfs=ignored_unprotected_pdfs,
                 stage="invoice_commit",
-                error=str(err),
+                error=_safe_commit_error(err),
             )
 
-        processed_items = self.runtime.data.setdefault("processed_messages", [])
-        for message in messages_to_mark:
-            message_id = str(message.get("id") or "")
-            if message_id and message_id not in processed_ids:
-                processed_items.append(_message_audit_record(message))
-                processed_ids.add(message_id)
-
-        self.runtime.data["invoice_import_guard"] = {
-            "status": "ok",
-            "checked_at": dt_util.utcnow().isoformat(),
-            "parser_version": _INVOICE_PARSER_VERSION,
-            "validated_encrypted_pdfs": len(staged),
-            "ignored_unprotected_pdfs": ignored_unprotected_pdfs,
-        }
+        # Faza 3: jeden atomowy zapis Store. Home Assistant Store nie propaguje
+        # wszystkich błędów zapisu, dlatego po zapisie odczytujemy dane ponownie
+        # i sprawdzamy, czy cała paczka rzeczywiście została utrwalona.
+        committed_data = deepcopy(self.runtime.data)
         await self.runtime.async_save()
+        persisted_data = await self.runtime.store.async_load()
+        if persisted_data != committed_data:
+            self.runtime.data = before_commit
+            return await self._block_import(
+                reason=reason,
+                started_at=started_at,
+                folder_name=folder_name,
+                folder_display=folder_display,
+                matched_messages=len(messages),
+                pdf_count=pdf_count,
+                ignored_unprotected_pdfs=ignored_unprotected_pdfs,
+                stage="store_commit",
+                error="Nie udało się potwierdzić atomowego zapisu paczki w DUON Store.",
+            )
+
+        if anchors_added:
+            await self.runtime.async_refresh_source_snapshot(notify=False)
         self.runtime.async_notify()
 
         canonical_refresh = None
