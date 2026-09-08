@@ -14,6 +14,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from .calibration_rules import (
+    DEFAULT_INVOICE_EXCLUDE_FROM_CALIBRATION,
+    calibration_readings,
+    migrate_invoice_calibration_flags,
+)
 from .const import (
     CONF_CONVERSION_FACTOR,
     CONF_DHW_ENTITY,
@@ -76,13 +81,6 @@ def _reading_recorder_values(
     if co is None or dhw is None:
         return None
     return co, dhw
-
-
-def _reading_excluded(reading: dict[str, Any]) -> bool:
-    quality = reading.get("quality")
-    return bool(
-        isinstance(quality, dict) and quality.get("exclude_from_calibration", False)
-    )
 
 
 def _reading_excluded_from_estimation(reading: dict[str, Any]) -> bool:
@@ -181,6 +179,9 @@ class DuonGazRuntime:
         stored = await self.store.async_load()
         self.data = stored or default_store_data()
         self._ensure_v2_shape()
+        if migrate_invoice_calibration_flags(self.data):
+            self._recalculate_calibration()
+            await self.async_save()
         await self.async_refresh_source_snapshot(notify=False)
 
     def _ensure_v2_shape(self) -> None:
@@ -378,12 +379,9 @@ class DuonGazRuntime:
     def _interval_rows(self) -> list[tuple[float, float, float]]:
         """Return valid calibration intervals as (CO kWh, CWU kWh, physical m3)."""
         rows: list[tuple[float, float, float]] = []
-        readings = self._readings()
+        readings = calibration_readings(self._readings())
 
         for previous, current in zip(readings, readings[1:]):
-            if _reading_excluded(previous) or _reading_excluded(current):
-                continue
-
             previous_meter = _as_float(previous.get("meter_m3"))
             current_meter = _as_float(current.get("meter_m3"))
             if previous_meter is None or current_meter is None:
@@ -530,7 +528,7 @@ class DuonGazRuntime:
         invoice_id: str | None = None,
         timestamp_precision: str = "day",
         meter_precision_m3: float = 1.0,
-        exclude_from_calibration: bool = False,
+        exclude_from_calibration: bool = DEFAULT_INVOICE_EXCLUDE_FROM_CALIBRATION,
     ) -> bool:
         """Add a trusted billing meter indication originating from an invoice.
 
