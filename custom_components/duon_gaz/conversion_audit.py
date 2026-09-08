@@ -278,7 +278,6 @@ def build_conversion_audit(
     Stały poziom bezwzględny nie jest mierzalny bez niezależnego kalorymetru.
     Dlatego referencja kWh/m3 jest stałą medianą ważoną historycznej relacji DUON
     do lokalnego wskaźnika. Wynik pokazuje odchylenie/dryf względem tej relacji.
-    Znak jest z perspektywy użytkownika: dodatni oznacza korzyść, ujemny stratę.
     """
     rows = sorted(list(intervals), key=lambda item: item.start)
     if not rows:
@@ -333,11 +332,13 @@ def build_conversion_audit(
     cumulative_pln = 0.0
     for sample in samples:
         local_factor = reference_factor * sample.local_yield_ratio
+        # Wynik jest liczony z perspektywy użytkownika: gdy DUON nalicza mniej
+        # niż lokalna referencja, saldo jest dodatnie; gdy więcej — ujemne.
         factor_delta = local_factor - sample.invoice_factor_kwh_m3
         difference_kwh = sample.billed_consumption_m3 * factor_delta
         difference_pln = difference_kwh * sample.gross_variable_rate_pln_kwh
         cumulative_pln += difference_pln
-        factor_diff_percent = (1.0 - sample.invoice_factor_kwh_m3 / local_factor) * 100.0
+        factor_diff_percent = (local_factor / sample.invoice_factor_kwh_m3 - 1.0) * 100.0
         local_yield_percent = (sample.local_yield_ratio - 1.0) * 100.0
 
         history.append(
