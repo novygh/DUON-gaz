@@ -2,10 +2,10 @@
 
 Dokument opisuje stan gałęzi rozwojowej `feature/store-v2-recorder-sums` i plan dojścia do stabilnego wydania. Jest przeznaczony jako techniczny punkt odniesienia dla dalszych prac nad integracją.
 
-Aktualny etap: **0.3.4 — automatyczny import faktur z Microsoft Outlook / Graph**.
+Aktualny etap: **0.3.4 — historia kanoniczna, faktury PDF i automatyczny import z Microsoft Outlook / Graph**.
 
 > [!IMPORTANT]
-> Gałąź rozwojowa i PR #1 nadal są wersją roboczą. Nie należy scalać ich do `main`, dopóki nie zostaną zakończone testy parsera starszych faktur, bezpiecznika importu oraz końcowy audyt historii kanonicznej.
+> Gałąź rozwojowa i PR #1 nadal pozostają wersją roboczą. Główna ścieżka danych została zweryfikowana na działającej instalacji, ale przed scaleniem do `main` pozostaje dokończenie obsługi reautoryzacji Outlook w UI, przegląd dokumentacji oraz końcowy przegląd PR.
 
 ## Architektura danych
 
@@ -38,7 +38,13 @@ Obecny algorytm:
 - buduje bieżący szacowany ogon po ostatniej kotwicy,
 - scala część rozliczoną i bieżącą w jedną monotoniczną serię,
 - odświeża ogon po nowych godzinowych statystykach Recorder,
-- przechodzi do pełnej przebudowy, gdy zmieni się fizyczna podstawa historii.
+- przechodzi do pełnej przebudowy, gdy zmieni się ostatnia fizyczna kotwica, źródło, kalibracja albo cały zestaw aktywnych kotwic.
+
+### Fingerprint aktywnych kotwic
+
+Publikacja historii przechowuje odcisk całego zestawu aktywnych kotwic fizycznych. Dzięki temu dodanie lub usunięcie kotwicy wewnątrz już rozliczonej historii wymusza pełną przebudowę, nawet jeśli ostatnia kotwica i współczynniki kalibracji nie uległy zmianie.
+
+Starsza publikacja bez fingerprintu wykonuje jednorazowo pełny rebuild i zapisuje fingerprint. Kolejne aktualizacje mogą ponownie korzystać z przyrostowego odświeżania ogona.
 
 ## Kalibracja CO/CWU
 
@@ -51,12 +57,12 @@ Nowa instalacja zaczyna od neutralnych współczynników technicznych. Po zgroma
 Odczyty z faktury mają dokładność dzienną i nie znają fizycznej godziny odczytu. Dlatego:
 
 - mogą służyć jako zaufane kotwice historii, jeżeli literalny typ odczytu jest `Rozliczeniowy`,
-- **nie mogą uczestniczyć w uczeniu kalibracji CO/CWU**,
-- zgodny ręczny odczyt w pobliżu ma pierwszeństwo i powoduje audytowe oznaczenie kotwicy fakturowej jako przesłoniętej.
+- **nie uczestniczą w uczeniu kalibracji CO/CWU**,
+- zgodny ręczny odczyt w pobliżu ma pierwszeństwo i powoduje audytowe oznaczenie kotwicy fakturowej jako przesłoniętej,
+- kotwica niemonotoniczna jest zachowywana audytowo, ale wykluczana z estymacji,
+- historyczna kotwica może zostać zachowana bez lokalnego snapshotu Recorder wyłącznie wtedy, gdy jest wykluczona z kalibracji i istnieje późniejsza zaufana kotwica; najnowsza kotwica nadal wymaga Recorder.
 
-Podczas testu 0.3.4 wykryto przypadek, w którym jedna kotwica dzienna weszła do kalibracji. Dane nie zostały utracone; błąd został rozpoznany, kalibracja przywrócona do stanu sprzed importu, a importer zmieniony tak, aby nowe kotwice fakturowe były wykluczane z kalibracji.
-
-Przed stabilnym wydaniem należy dopilnować, aby odpowiadająca temu migracja/naprawa runtime znajdowała się również w kodzie repozytorium, a nie wyłącznie w instalacji testowej.
+Migracja Store automatycznie oznacza istniejące kotwice fakturowe jako wykluczone z kalibracji, zachowując ich niezależną flagę udziału w estymacji. Przedziały kalibracyjne są budowane dopiero po odfiltrowaniu kotwic wykluczonych, więc taka kotwica nie rozcina poprawnego przedziału ręcznego.
 
 ## Faktury PDF
 
@@ -64,11 +70,22 @@ Parser używa `pypdf`, bez OCR. Dane przed zapisem są walidowane między innymi
 
 - zgodność różnicy wskazań gazomierza ze zużyciem m³,
 - zgodność m³ w pozycji gazowej z tabelą odczytów,
-- zgodność energii rozliczeniowej ze współczynnikiem konwersji.
+- zgodność energii rozliczeniowej ze współczynnikiem konwersji,
+- zgodność energii pozycji dystrybucyjnych z energią rozliczeniową,
+- zgodność współczynnika konwersji pomiędzy wieloma pozycjami gazowymi.
 
 Ponowny import tego samego numeru faktury jest idempotentny.
 
-Starsze faktury DUON występują w kilku wariantach układu tekstu. Aktualny parser rozpoznaje nowszy wariant, ale wymaga rozszerzenia o starsze warianty pozycji dystrybucyjnych. Nie należy rozluźniać walidacji tylko po to, aby zaakceptować nieznany dokument — każdy nowy wariant powinien dostać jawny test regresyjny.
+Parser obsługuje nowsze i starsze warianty faktur, w tym:
+
+- dziesiętne ilości energii w pozycjach dystrybucyjnych,
+- okresy rozliczeniowe podzielone na kilka stawek,
+- wiele pozycji gazowych i dystrybucyjnych,
+- polski zapis separatora tysięcy w energii kWh.
+
+Przy kilku stawkach wyliczana jest efektywna stawka ważona. Współczynnik konwersji nie jest uśredniany — niezgodność pomiędzy pozycjami powoduje błąd parsera.
+
+Każdy rozpoznany wariant ma jawny test regresyjny. Nie należy rozluźniać walidacji tylko po to, aby zaakceptować nieznany dokument.
 
 ## Automatyczny Outlook / Microsoft Graph — 0.3.4
 
@@ -85,7 +102,7 @@ Zastosowany jest **Device Code Flow dla publicznego klienta**, bez sekretu aplik
 - brak wysyłania, przenoszenia i usuwania wiadomości,
 - brak okresowo wygasającego `client_secret`.
 
-Access token i refresh token są przechowywane w danych wpisu konfiguracji Home Assistanta. Refresh token jest aktualizowany po odświeżeniu tokenu. Gdy Microsoft wymaga ponownego logowania, integracja uruchamia reautoryzację Home Assistanta.
+Access token i refresh token są przechowywane w danych wpisu konfiguracji Home Assistanta. Refresh token jest aktualizowany po odświeżeniu tokenu. Gdy Microsoft wymaga ponownego logowania, integracja potrafi rozpocząć reautoryzację Home Assistanta.
 
 ### Wyszukiwanie wiadomości
 
@@ -110,15 +127,15 @@ Wiadomości DUON mogą zawierać również dokumenty informacyjne, np. komunikat
 
 - zaszyfrowany PDF jest kandydatem na fakturę,
 - niezabezpieczony PDF jest ignorowany przez importer faktur,
-- pominięty dokument informacyjny nie powinien powodować statusu `partial`.
+- pominięty dokument informacyjny nie powoduje statusu `partial`.
 
 Dokumenty taryfowe można w przyszłości obsłużyć osobnym, opcjonalnym parserem. Nie należy mieszać ich z parserem faktur.
 
 ## Bezpiecznik zmiany układu faktury
 
-Automatyczny import ma działać w trybie **fail-closed**.
+Automatyczny import działa w trybie **fail-closed**.
 
-Przed zapisaniem nowej paczki faktur wykonywany jest preflight. Jeżeli choć jeden nowy zaszyfrowany PDF nie przejdzie parsera lub walidacji:
+Przed zapisaniem nowej paczki faktur wykonywany jest pełny preflight. Jeżeli choć jeden nowy zaszyfrowany PDF nie przejdzie parsera lub walidacji:
 
 - nowe faktury z tej synchronizacji nie są częściowo zatwierdzane,
 - nie są zmieniane kotwice historii,
@@ -128,55 +145,74 @@ Przed zapisaniem nowej paczki faktur wykonywany jest preflight. Jeżeli choć je
 - zapisywany jest bezpieczny stan diagnostyczny z nazwą pliku, czasem, wersją parsera i krótkim odciskiem dokumentu,
 - treść faktury, hasło i tokeny nie są zapisywane diagnostycznie.
 
-Po aktualizacji parsera dokument ma zostać automatycznie podjęty ponownie.
+Po przejściu preflight wszystkie importy są etapowane w pamięci. `billing_periods`, `processed_invoices`, `invoice_readings`, `processed_messages` i stan guard są zapisywane jednym zapisem Store. Store używa `atomic_writes=True`, a synchronizator po zapisie ponownie odczytuje dane i porównuje je z zamierzonym stanem. Niepotwierdzony zapis powoduje wycofanie stanu w pamięci i status `blocked`.
 
-Kod bezpiecznika jest już na gałęzi rozwojowej, ale nie został jeszcze załadowany i zweryfikowany w działającej instalacji po ostatnim restarcie. Następny restart ma być wspólny dla poprawek parsera, runtime i synchronizatora Outlook.
+Mechanizm został zweryfikowany na działającej instalacji zarówno przy błędzie parsera, jak i przy błędzie fazy zapisu kotwicy: w obu przypadkach istniejące dane pozostały niezmienione.
+
+## Historyczne faktury poza zakresem Recorder
+
+Starsza faktura może zawierać poprawny odczyt fizyczny z okresu, dla którego lokalne godzinowe statystyki Recorder nie są już dostępne.
+
+Taka kotwica jest dopuszczona bez snapshotu Recorder tylko wtedy, gdy:
+
+- jest wykluczona z kalibracji,
+- istnieje późniejsza zaufana kotwica.
+
+Dzięki temu może pozostać częścią audytu i historii fizycznej, ale nie może zostać najnowszą bazą bieżącej estymacji. Builder historii i tak ogranicza aktywne kotwice do zakresu faktycznie dostępnej serii Recorder.
 
 ## Reautoryzacja Microsoft
 
-Obecny kod potrafi automatycznie rozpocząć reauth po błędzie tokenu lub autoryzacji Graph. Docelowo przed wydaniem 0.3.4 należy dodatkowo zapewnić użytkownikowi prostą, jednoznaczną ścieżkę **Połącz ponownie Outlook** bez terminala, plików i wchodzenia do Microsoft Entra.
+Kod potrafi automatycznie rozpocząć reauth po błędzie tokenu lub autoryzacji Graph.
+
+Pozostałym zadaniem przed wydaniem 0.3.4 jest zapewnienie użytkownikowi prostej, jednoznacznej ścieżki **Połącz ponownie Outlook** bez terminala, plików i wchodzenia do Microsoft Entra.
 
 ## Stan testów 0.3.4
 
-Potwierdzono na działającej instalacji:
+Aktualny zestaw CI zawiera **23 testy jednostkowe** i przechodzi w całości.
 
-- Device Code Flow dla osobistego konta Microsoft,
-- zgodę wyłącznie `Mail.Read` + `offline_access`,
-- zapis tokenu i przeładowanie wpisu integracji bez restartu całego HA,
-- dostęp Graph do skonfigurowanego folderu,
-- pobieranie wielu PDF-ów z wiadomości,
-- import nowszych faktur,
-- idempotencję numeru faktury,
-- pierwszeństwo dokładnego ręcznego odczytu nad zgodną kotwicą z faktury,
-- przywrócenie kalibracji po wykrytym błędzie kotwicy dziennej.
+Zakres obejmuje między innymi:
 
-Przed migracją Outlook 9 istniejących testów jednostkowych przechodziło poprawnie. Zestaw wymaga rozszerzenia o testy Device Code, preflight Outlook, pomijanie niezabezpieczonych PDF-ów, migrację flag kalibracji i starsze warianty faktur.
+- historię kanoniczną i dokładne domknięcie do kotwic,
+- brakujące godziny i rollbacki Recorder,
+- scalenie historii rozliczonej z bieżącym ogonem,
+- starsze i nowsze warianty faktur,
+- separator tysięcy w energii kWh,
+- różne współczynniki konwersji jako błąd fail-closed,
+- pomijanie niezabezpieczonych PDF-ów,
+- zablokowanie całej paczki przy błędnej fakturze,
+- rollback przy niepotwierdzonym zapisie Store,
+- migrację flag kalibracji,
+- brak rozcinania przedziału kalibracyjnego przez kotwicę wykluczoną,
+- regułę historycznej kotwicy bez Recorder,
+- fingerprint aktywnych kotwic i wymuszenie pełnego rebuilda po zmianie zestawu kotwic.
 
-## Ważna różnica: repozytorium a instalacja testowa
+### Zweryfikowane na działającej instalacji
 
-W czasie testów część naprawy runtime została wdrożona bezpośrednio do instalacji testowej, aby natychmiast przywrócić poprawną kalibrację. Przed dalszym wydaniem trzeba sprawdzić gałąź i przenieść do niej komplet tych zmian:
+Potwierdzono:
 
-- automatyczne oznaczenie istniejących kotwic fakturowych jako wykluczonych z kalibracji,
-- przeliczenie kalibracji po tej migracji,
-- budowanie przedziałów kalibracyjnych po odfiltrowaniu kotwic wykluczonych, tak aby wykluczona kotwica nie rozcinała poprawnego przedziału ręcznego,
-- bezpieczna domyślna wartość `exclude_from_calibration=True` dla kotwic fakturowych.
-
-Nie wolno zakładać, że sam fakt poprawnego działania instalacji testowej oznacza, że wszystkie hotfixy są już zapisane w repozytorium.
+- pełną synchronizację historycznych wiadomości Outlook,
+- parser faktur v3 na rzeczywistych nowszych i starszych dokumentach,
+- pomijanie niezabezpieczonych dokumentów informacyjnych,
+- idempotencję wcześniej przetworzonych faktur,
+- fail-closed bez częściowego zapisu,
+- atomowy zapis całej paczki i poprawny `invoice_import_guard`,
+- klasyfikację kotwic fakturowych jako aktywnych, przesłoniętych, niemonotonicznych lub historycznych bez Recorder,
+- brak udziału kotwic fakturowych w kalibracji,
+- niezmienność współczynników kalibracji po pełnym imporcie,
+- pełny rebuild historii po zmianie zestawu aktywnych kotwic,
+- zapis i weryfikację całej historii `duon_gaz:canonical_gas` w Recorder,
+- dokładne domknięcie części rozliczonej do gazomierza,
+- brak ujemnego zużycia i nierozliczonych rollbacków,
+- zachowanie surowych statystyk CO/CWU bez modyfikacji.
 
 ## Plan dalszych prac
 
-1. **Zsynchronizować runtime z naprawą kalibracji** i dodać test regresyjny.
-2. **Poznać starsze warianty układu faktur** bez ujawniania hasła do PDF; poprzednia próba diagnostyki z powłoki dodatku SSH zakończyła się brakiem `pypdf` w tym środowisku, mimo że biblioteka jest zależnością integracji w Home Assistant Core.
-3. Rozszerzyć parser o jawnie rozpoznane starsze warianty `distribution_variable_rate` / `distribution_fixed_rate` i dodać fixture/test dla każdego wariantu.
-4. Zweryfikować bezpiecznik preflight: nierozpoznana faktura ma zablokować zatwierdzenie całej nowej paczki bez naruszenia istniejących danych.
-5. Załadować najnowszy kod Outlook do działającej instalacji i ponowić synchronizację.
-6. Sprawdzić, że niezabezpieczone dokumenty informacyjne są pomijane bez błędu, a wszystkie prawdziwe faktury są poprawnie importowane.
-7. Wykonać pełny audyt DUON Store: brak duplikatów, spójne okresy rozliczeniowe, prawidłowe klasyfikacje kotwic.
-8. Ponownie opublikować i zweryfikować pełną historię `duon_gaz:canonical_gas` po ustabilizowaniu importu. Jest to konieczne, ponieważ wcześniejsza testowa synchronizacja mogła uruchomić przebudowę w czasie, gdy kalibracja była chwilowo nieprawidłowa.
-9. Dodać prostą ręczną ścieżkę **Połącz ponownie Outlook** w UI Home Assistanta.
-10. Rozszerzyć testy jednostkowe i uruchomić `ha core check`.
-11. Uzupełnić README/release notes, zakończyć przegląd PR #1 i dopiero wtedy rozważyć scalenie do `main`.
-12. Kolejne osobne etapy: SMS oraz finalna konfiguracja Energy Dashboard.
+1. Dodać prostą ręczną ścieżkę **Połącz ponownie Outlook** w UI Home Assistanta.
+2. Dodać lub uzupełnić testy przepływu reautoryzacji Device Code tam, gdzie można to zrobić bez zależności od prawdziwego konta Microsoft.
+3. Uzupełnić README i release notes o finalne zachowanie 0.3.4.
+4. Wykonać końcowy przegląd PR #1 i pozostawić go jako Draft do zakończenia powyższych punktów.
+5. Po stabilizacji rozważyć scalenie do `main`.
+6. Kolejne osobne etapy: SMS oraz finalna konfiguracja Energy Dashboard.
 
 ## Zasady bezpieczeństwa dalszych prac
 
