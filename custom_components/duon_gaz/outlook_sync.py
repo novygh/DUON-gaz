@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -32,6 +33,26 @@ def _processed_message_ids(items: Any) -> set[str]:
             if value:
                 result.add(str(value))
     return result
+
+
+def _pdf_is_encrypted(content: bytes) -> bool:
+    """Sprawdź, czy PDF wymaga odszyfrowania przed odczytem.
+
+    Faktury DUON są chronione hasłem. Niezabezpieczone PDF-y dołączane do
+    wiadomości (np. informacje taryfowe) nie są fakturami i mają być
+    ignorowane przez automatyczny importer.
+    """
+    try:
+        from pypdf import PdfReader
+        from pypdf.errors import PdfReadError
+    except ImportError as err:
+        raise DuonInvoiceParseError("Brak biblioteki pypdf do odczytu faktur.") from err
+
+    try:
+        reader = PdfReader(BytesIO(content))
+    except (PdfReadError, ValueError, TypeError) as err:
+        raise DuonInvoiceParseError("Nie udało się odczytać załącznika PDF.") from err
+    return bool(reader.is_encrypted)
 
 
 class DuonOutlookSynchronizer:
@@ -70,6 +91,7 @@ class DuonOutlookSynchronizer:
         anchors_added = 0
         messages_marked = 0
         pdf_count = 0
+        ignored_unprotected_pdfs = 0
 
         try:
             folder = await self.graph.async_find_mail_folder(folder_name)
@@ -89,6 +111,7 @@ class DuonOutlookSynchronizer:
                 "matched_messages": 0,
                 "processed_messages": 0,
                 "pdf_count": 0,
+                "ignored_unprotected_pdfs": 0,
                 "imported_invoices": 0,
                 "duplicate_invoices": 0,
                 "anchors_added": 0,
@@ -133,6 +156,14 @@ class DuonOutlookSynchronizer:
             for attachment in attachments:
                 pdf_count += 1
                 try:
+                    is_encrypted = await self.runtime.hass.async_add_executor_job(
+                        _pdf_is_encrypted,
+                        attachment.content,
+                    )
+                    if not is_encrypted:
+                        ignored_unprotected_pdfs += 1
+                        continue
+
                     invoice = await self.runtime.hass.async_add_executor_job(
                         parse_invoice_pdf_bytes,
                         attachment.content,
@@ -196,6 +227,7 @@ class DuonOutlookSynchronizer:
             "matched_messages": len(messages),
             "processed_messages": messages_marked,
             "pdf_count": pdf_count,
+            "ignored_unprotected_pdfs": ignored_unprotected_pdfs,
             "imported_invoices": imported,
             "duplicate_invoices": duplicates,
             "anchors_added": anchors_added,
