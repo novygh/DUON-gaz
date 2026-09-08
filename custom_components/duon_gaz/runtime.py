@@ -17,6 +17,7 @@ from homeassistant.util import dt as dt_util
 from .calibration_rules import (
     DEFAULT_INVOICE_EXCLUDE_FROM_CALIBRATION,
     calibration_readings,
+    historical_invoice_without_recorder_allowed,
     migrate_invoice_calibration_flags,
 )
 from .const import (
@@ -605,12 +606,34 @@ class DuonGazRuntime:
                 self.async_notify()
             return False
 
-        snapshot = await async_get_recorder_snapshot_at(
-            self.hass,
-            self.heating_entity,
-            self.dhw_entity,
-            parsed,
-        )
+        snapshot: RecorderSnapshot | None = None
+        try:
+            snapshot = await async_get_recorder_snapshot_at(
+                self.hass,
+                self.heating_entity,
+                self.dhw_entity,
+                parsed,
+            )
+        except ValueError:
+            if not historical_invoice_without_recorder_allowed(
+                exclude_from_calibration=bool(exclude_from_calibration),
+                has_following_anchor=following is not None,
+            ):
+                raise
+
+        recorder = None
+        quality_state = "invoice_billing"
+        recorder_snapshot_state = "matched"
+        if snapshot is not None:
+            recorder = {
+                "timestamp": snapshot.timestamp.isoformat(),
+                "co_sum_kwh": snapshot.heating_sum_kwh,
+                "dhw_sum_kwh": snapshot.dhw_sum_kwh,
+                "method": "nearest_hourly_statistic",
+            }
+        else:
+            quality_state = "invoice_billing_without_recorder"
+            recorder_snapshot_state = "missing_historical"
 
         reading = {
             "timestamp": parsed.isoformat(),
@@ -621,14 +644,10 @@ class DuonGazRuntime:
             "reading_type": reading_type,
             "reading_classification": "trusted_billing_reading",
             "invoice_id": invoice_id,
-            "recorder": {
-                "timestamp": snapshot.timestamp.isoformat(),
-                "co_sum_kwh": snapshot.heating_sum_kwh,
-                "dhw_sum_kwh": snapshot.dhw_sum_kwh,
-                "method": "nearest_hourly_statistic",
-            },
+            "recorder": recorder,
             "quality": {
-                "state": "invoice_billing",
+                "state": quality_state,
+                "recorder_snapshot": recorder_snapshot_state,
                 "exclude_from_calibration": bool(exclude_from_calibration),
                 "exclude_from_estimation": False,
             },
