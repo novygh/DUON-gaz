@@ -1,4 +1,4 @@
-"""Import parsed DUON invoices into the integration Store."""
+"""Import przetworzonych faktur DUON do magazynu danych integracji."""
 from __future__ import annotations
 
 from datetime import datetime, time
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def _processed_invoice_numbers(items: Any) -> set[str]:
-    """Return invoice numbers already recorded in Store."""
+    """Zwróć numery faktur już zapisanych w magazynie danych."""
     if not isinstance(items, list):
         return set()
 
@@ -29,12 +29,12 @@ def _processed_invoice_numbers(items: Any) -> set[str]:
 
 
 def _billing_period(invoice: DuonInvoice, source_message_id: str | None) -> dict[str, Any]:
-    """Build the auditable billing record stored independently of anchors."""
+    """Zbuduj audytowalny rekord rozliczeniowy niezależny od kotwic gazomierza."""
     data = invoice.as_dict()
     data.update(
         {
             "source": "duon_invoice",
-            # Compatibility key consumed by runtime.conversion_factor.
+            # Klucz zgodności używany przez runtime.conversion_factor.
             "conversion_factor": invoice.conversion_factor_kwh_m3,
             "current_reading_classification": (
                 "trusted_billing_reading"
@@ -49,11 +49,11 @@ def _billing_period(invoice: DuonInvoice, source_message_id: str | None) -> dict
 
 
 def _invoice_day_timestamp(invoice: DuonInvoice) -> datetime:
-    """Represent a day-only invoice reading at local noon.
+    """Reprezentuj odczyt z datą dzienną jako lokalne południe.
 
-    DUON gives a billing date rather than the physical read time. Noon avoids
-    pretending the reading happened at midnight and minimizes day-edge bias
-    when matching the nearest hourly Recorder statistic.
+    DUON podaje datę rozliczeniową, a nie dokładny czas fizycznego odczytu.
+    Południe nie udaje odczytu o północy i ogranicza błąd przy dopasowaniu
+    najbliższej godzinowej statystyki Recorder.
     """
     return datetime.combine(
         invoice.current_reading.date,
@@ -68,11 +68,11 @@ async def async_import_invoice(
     *,
     source_message_id: str | None = None,
 ) -> dict[str, Any]:
-    """Persist one parsed invoice and optionally create its meter anchor.
+    """Zapisz jedną fakturę i opcjonalnie utwórz kotwicę gazomierza.
 
-    Billing data is always retained. Only a reading type explicitly classified
-    as trusted by the parser is allowed to participate in the physical model.
-    Re-importing the same invoice number is idempotent.
+    Dane rozliczeniowe są zachowywane zawsze. Tylko typ odczytu jawnie
+    sklasyfikowany przez parser jako zaufany może uczestniczyć w modelu
+    fizycznym. Ponowny import tego samego numeru faktury jest idempotentny.
     """
     processed = runtime.data.setdefault("processed_invoices", [])
     if invoice.invoice_number in _processed_invoice_numbers(processed):
