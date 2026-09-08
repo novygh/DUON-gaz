@@ -72,16 +72,16 @@ def _as_date(value: Any, field: str) -> date:
 
 
 def _period_bounds(period: dict[str, Any], timezone: tzinfo) -> tuple[datetime, datetime]:
-    previous = period.get("previous_reading")
-    current = period.get("current_reading")
-    if not isinstance(previous, dict) or not isinstance(current, dict):
-        raise CanonicalCostError("Faktura nie zawiera pary odczytów gazomierza.")
-    start_day = _as_date(previous.get("date"), "previous_reading.date")
-    end_day = _as_date(current.get("date"), "current_reading.date")
-    start = datetime.combine(start_day, time(hour=12), tzinfo=timezone)
-    end = datetime.combine(end_day, time(hour=12), tzinfo=timezone)
+    """Return the invoice accounting period as complete local calendar days."""
+    start_day = _as_date(period.get("period_start"), "period_start")
+    end_day = _as_date(period.get("period_end"), "period_end")
+    if end_day < start_day:
+        raise CanonicalCostError("Okres rozliczeniowy faktury nie jest rosnący.")
+
+    start = datetime.combine(start_day, time.min, tzinfo=timezone)
+    end = datetime.combine(end_day + timedelta(days=1), time.min, tzinfo=timezone)
     if end <= start:
-        raise CanonicalCostError("Okres odczytów faktury nie jest rosnący.")
+        raise CanonicalCostError("Okres rozliczeniowy faktury jest pusty.")
     return start, end
 
 
@@ -144,17 +144,11 @@ def billing_period_fingerprint(periods: Iterable[dict[str, Any]]) -> str:
     for period in periods:
         if not isinstance(period, dict):
             continue
-        previous = period.get("previous_reading")
-        current = period.get("current_reading")
         normalized.append(
             {
                 "invoice_number": str(period.get("invoice_number") or ""),
-                "previous_date": (
-                    previous.get("date") if isinstance(previous, dict) else None
-                ),
-                "current_date": (
-                    current.get("date") if isinstance(current, dict) else None
-                ),
+                "period_start": period.get("period_start"),
+                "period_end": period.get("period_end"),
                 "billed_energy_kwh": period.get("billed_energy_kwh"),
                 "gas_rate_net_pln_kwh": period.get("gas_rate_net_pln_kwh"),
                 "distribution_variable_net_pln_kwh": period.get(
@@ -165,7 +159,7 @@ def billing_period_fingerprint(periods: Iterable[dict[str, Any]]) -> str:
             }
         )
     normalized.sort(
-        key=lambda item: (str(item["current_date"]), item["invoice_number"])
+        key=lambda item: (str(item["period_end"]), item["invoice_number"])
     )
     payload = json.dumps(
         normalized,
@@ -297,8 +291,6 @@ def build_canonical_costs(
             for index in indices
         )
         if abs(invoice_published - gross_total) > 1e-6:
-            # Each invoice owns these indices exclusively, so the exact closure
-            # can be restored on its last hour without affecting another invoice.
             fixed[indices[-1]] += gross_total - invoice_published
             invoice_published = sum(
                 heating[index] + dhw[index] + fixed[index]
