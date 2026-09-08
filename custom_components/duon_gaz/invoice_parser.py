@@ -249,14 +249,16 @@ def parse_invoice_text(text: str) -> DuonInvoice:
 
     gas_m3 = [_number(item.group("m3")) for item in gas_rows]
     gas_kwh = [_number(item.group("kwh")) for item in gas_rows]
+    gas_factors = [_number(item.group("factor")) for item in gas_rows]
     charge_m3 = sum(gas_m3)
     billed_kwh = sum(gas_kwh)
     if charge_m3 <= 0:
         raise DuonInvoiceParseError("Zerowe zużycie w pozycjach gazowych faktury.")
-    factor = sum(
-        _number(item.group("factor")) * m3
-        for item, m3 in zip(gas_rows, gas_m3, strict=True)
-    ) / charge_m3
+    factor = gas_factors[0]
+    if any(abs(value - factor) > 0.000001 for value in gas_factors[1:]):
+        raise DuonInvoiceParseError(
+            "Pozycje gazowe mają różne współczynniki konwersji kWh/m3."
+        )
     gas_rate = _weighted_rate(
         gas_rows,
         weight_group="kwh",
