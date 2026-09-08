@@ -129,9 +129,9 @@ class ConversionAuditTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["sample_count"], 8)
         self.assertAlmostEqual(result["reference_factor_kwh_m3"], reference, delta=0.02)
-        self.assertGreater(result["last_difference_pln"], 0.0)
-        self.assertGreater(result["last_factor_difference_percent"], 4.5)
-        self.assertLess(result["last_factor_difference_percent"], 5.5)
+        self.assertLess(result["last_difference_pln"], 0.0)
+        self.assertLess(result["last_factor_difference_percent"], -4.5)
+        self.assertGreater(result["last_factor_difference_percent"], -5.5)
         self.assertEqual(len(result["history"]), 8)
         self.assertEqual(result["skipped_without_exact_manual_bounds_count"], 0)
 
