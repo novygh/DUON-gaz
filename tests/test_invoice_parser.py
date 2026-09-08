@@ -88,6 +88,26 @@ PUNKT ODBIORU 999003 50,00 11,50 61,50 23%
 """
 
 
+# Syntetyczny przypadek, w którym pypdf zwraca całkowitą energię z kropką
+# jako polskim separatorem tysięcy, np. 1.500 KWH = 1500 KWH.
+FAKTURA_TYSIACE_KWH = """
+DUON Dystrybucja
+Faktura VAT nr 3333333333
+Za okres: 01.03.2030-31.03.2030
+Data wystawienia: 02.04.2030
+TERMIN PŁATNOŚCI: 16.04.2030
+Punkt odbioru (999004)
+Układ pomiarowy nr Rodzaj odczytu Data Wskazanie Układ pomiarowy nr Rodzaj odczytu Data Wskazanie ZUŻYCIE
+TEST 00000000003 Rozliczeniowy 28.02.2030 500,00 TEST 00000000003 Rozliczeniowy 31.03.2030 650,00 150,00
+Suma: 150,00
+Opłata abonamentowa - gaz 1 SZT 5,00 5,00 1,15 6,15 23%
+Opłata dystrybucyjna stała - gaz 1 SZT 7,00 7,00 1,61 8,61 23%
+Należność za gaz E (10,000 KWH/M3 * 150 M3) 1.500 KWH 0,20 300,00 69,00 369,00 23%
+Opłata dystrybucyjna zmienna (10,000 KWH/M3 * 150 M3) 1.500 KWH 0,03 45,00 10,35 55,35 23%
+PUNKT ODBIORU 999004 357,00 82,11 439,11 23%
+"""
+
+
 class TestParserFakturyDuon(unittest.TestCase):
     def test_poprawna_faktura(self) -> None:
         invoice = parse_invoice_text(FAKTURA_TESTOWA)
@@ -123,6 +143,15 @@ class TestParserFakturyDuon(unittest.TestCase):
         self.assertAlmostEqual(invoice.gas_rate_net_pln_kwh, 0.175)
         self.assertAlmostEqual(invoice.distribution_fixed_net_pln, 7.0)
         self.assertAlmostEqual(invoice.distribution_variable_net_pln_kwh, 0.025)
+
+    def test_separator_tysiecy_w_energii_kwh(self) -> None:
+        invoice = parse_invoice_text(FAKTURA_TYSIACE_KWH)
+
+        self.assertEqual(invoice.consumption_m3, 150.0)
+        self.assertEqual(invoice.billed_energy_kwh, 1500.0)
+        self.assertAlmostEqual(invoice.conversion_factor_kwh_m3, 10.0)
+        self.assertAlmostEqual(invoice.gas_rate_net_pln_kwh, 0.20)
+        self.assertAlmostEqual(invoice.distribution_variable_net_pln_kwh, 0.03)
 
     def test_rozne_wspolczynniki_konwersji_blokuja_import(self) -> None:
         text = FAKTURA_DWIE_STAWKI.replace(
