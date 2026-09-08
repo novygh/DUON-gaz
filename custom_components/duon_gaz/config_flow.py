@@ -245,8 +245,7 @@ class DuonGazConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> FlowResult:
-        """Pokaż kod urządzenia i poczekaj na potwierdzenie Microsoft."""
-        del user_input
+        """Pokaż kod urządzenia w zwykłym formularzu i odbierz wynik logowania."""
         if self._login_task is None:
             return self.async_abort(reason="auth_session_missing")
 
@@ -254,20 +253,22 @@ class DuonGazConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             error = self._login_task.exception()
             if error is not None:
                 self._auth_error = str(error)
-                return self.async_show_progress_done(
-                    next_step_id="outlook_auth_error"
-                )
+                return await self.async_step_outlook_auth_error()
             self._token_result = self._login_task.result()
-            return self.async_show_progress_done(next_step_id="outlook_finish")
+            return await self.async_step_outlook_finish()
 
-        return self.async_show_progress(
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            errors["base"] = "authorization_pending"
+
+        return self.async_show_form(
             step_id="outlook_authorize",
-            progress_action="wait_for_microsoft",
+            data_schema=vol.Schema({}),
+            errors=errors,
             description_placeholders={
                 "url": str(self._device_info.get("verification_uri") or ""),
                 "code": str(self._device_info.get("user_code") or ""),
             },
-            progress_task=self._login_task,
         )
 
     async def async_step_outlook_finish(
