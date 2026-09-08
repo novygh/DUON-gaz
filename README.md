@@ -1,6 +1,6 @@
 # DUON Gaz
 
-Niestandardowa integracja dla Home Assistanta do rekonstrukcji i bieżącego śledzenia zużycia gazu na podstawie fizyczznych odczytów gazomierza oraz skumulowanych statystyk CO/CWU zapisanych w Recorder.
+Niestandardowa integracja dla Home Assistanta do rekonstrukcji i bieżącego śledzenia zużycia gazu na podstawie fizycznych odczytów gazomierza oraz skumulowanych statystyk CO/CWU zapisanych w Recorder.
 
 ## Aktualny stan projektu
 
