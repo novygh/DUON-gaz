@@ -16,3 +16,7 @@ import_history:
       default: false
       selector:
         boolean:
+
+refresh_tail:
+  name: Odśwież bieżący ogon
+  description: Aktualizuje w Recorder tylko bieżącą, nierozliczoną część historii DUON. Gdy zmienił się odczyt fizyczny, źródło lub kalibracja, automatycznie wykonuje pełną przebudowę.
