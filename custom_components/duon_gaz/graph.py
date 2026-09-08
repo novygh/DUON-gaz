@@ -1,8 +1,8 @@
 """Minimalny klient Microsoft Graph używany przez DUON Gaz."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import base64
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
@@ -10,7 +10,8 @@ from aiohttp import ClientError
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
+
+from .microsoft_auth import MicrosoftTokenSession
 
 _GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 _MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -37,13 +38,12 @@ class GraphPdfAttachment:
 class DuonGraphClient:
     """Klient tylko do odczytu poczty potrzebnej do faktur DUON."""
 
-    def __init__(self, hass: HomeAssistant, oauth_session: OAuth2Session) -> None:
-        self._oauth_session = oauth_session
+    def __init__(self, hass: HomeAssistant, auth_session: MicrosoftTokenSession) -> None:
+        self._auth_session = auth_session
         self._session = async_get_clientsession(hass)
 
     async def _headers(self) -> dict[str, str]:
-        await self._oauth_session.async_ensure_token_valid()
-        token = self._oauth_session.token.get("access_token")
+        token = await self._auth_session.async_get_access_token()
         if not token:
             raise DuonGraphAuthError("Brak tokenu dostępu Microsoft Graph.")
         return {"Authorization": f"Bearer {token}"}
@@ -101,13 +101,6 @@ class DuonGraphClient:
 
         return items[:max_items]
 
-    async def async_get_account(self) -> dict[str, Any]:
-        """Pobierz podstawowe dane zalogowanego konta."""
-        return await self._get_json(
-            f"{_GRAPH_ROOT}/me",
-            params={"$select": "id,displayName,mail,userPrincipalName"},
-        )
-
     async def async_find_mail_folder(self, query: str) -> dict[str, Any]:
         """Znajdź folder po dokładnej nazwie albo ścieżce, także zagnieżdżony."""
         wanted = query.strip().strip("/").casefold()
@@ -119,7 +112,6 @@ class DuonGraphClient:
             params={
                 "$top": "100",
                 "$select": "id,displayName,parentFolderId,childFolderCount",
-                "includeHiddenFolders": "false",
             },
             max_items=200,
         )
@@ -154,7 +146,6 @@ class DuonGraphClient:
                 params={
                     "$top": "100",
                     "$select": "id,displayName,parentFolderId,childFolderCount",
-                    "includeHiddenFolders": "false",
                 },
                 max_items=200,
             )
@@ -251,7 +242,9 @@ class DuonGraphClient:
             try:
                 content = base64.b64decode(encoded, validate=True)
             except ValueError as err:
-                raise DuonGraphError(f"Nieprawidłowe dane base64 załącznika {name}.") from err
+                raise DuonGraphError(
+                    f"Nieprawidłowe dane base64 załącznika {name}."
+                ) from err
             if len(content) > _MAX_ATTACHMENT_BYTES:
                 raise DuonGraphError(f"Załącznik {name} przekracza dozwolony rozmiar.")
             result.append(
