@@ -72,7 +72,6 @@ class DuonOutlookSynchronizer:
         pdf_count = 0
 
         try:
-            account = await self.graph.async_get_account()
             folder = await self.graph.async_find_mail_folder(folder_name)
             folder_id = str(folder.get("id") or "")
             messages = await self.graph.async_list_matching_messages(
@@ -188,13 +187,11 @@ class DuonOutlookSynchronizer:
                 canonical_refresh = {"status": "error", "reason": str(err)}
                 errors.append({"stage": "canonical_refresh", "error": str(err)})
 
-        account_name = account.get("mail") or account.get("userPrincipalName")
         result = {
             "status": "ok" if not errors else "partial",
             "reason": reason,
             "started_at": started_at,
             "finished_at": dt_util.utcnow().isoformat(),
-            "account": account_name,
             "folder": folder.get("path") or folder.get("displayName") or folder_name,
             "matched_messages": len(messages),
             "processed_messages": messages_marked,
