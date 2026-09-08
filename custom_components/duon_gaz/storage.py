@@ -1,4 +1,4 @@
-"""Persistent storage for DUON Gaz."""
+"""Trwały magazyn danych integracji DUON Gaz."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -15,22 +15,22 @@ from .const import (
 
 
 def default_store_data() -> dict[str, Any]:
-    """Return an empty v2 data model."""
+    """Zwróć pusty model danych v2."""
     return {
         "schema_version": 2,
         "pending_meter_m3": None,
         "pending_entered_by_user_id": None,
         "pending_entered_at": None,
-        # Exact/manual anchors. Historical imports also live here.
+        # Dokładne/ręczne kotwice. Import historyczny również trafia tutaj.
         "manual_readings": [],
-        # Trusted invoice/field-reader anchors are kept separately so their
-        # lower timestamp/meter precision remains auditable.
+        # Zaufane kotwice z faktur są przechowywane oddzielnie, aby zachować
+        # informację o ich niższej precyzji czasu i wskazania gazomierza.
         "invoice_readings": [],
         "calibration": {
             "co_m3_per_kwh": DEFAULT_CO_M3_PER_KWH,
             "dhw_m3_per_kwh": DEFAULT_DHW_M3_PER_KWH,
             "effective_m3_per_kwh": None,
-            "method": "historical_bootstrap_2024_2026",
+            "method": "neutral_bootstrap",
             "sample_count": 0,
             "mae_m3": None,
             "updated_at": None,
@@ -47,7 +47,7 @@ def default_store_data() -> dict[str, Any]:
 
 
 def _migrate_v1(data: dict[str, Any]) -> dict[str, Any]:
-    """Migrate the original v0.1 runtime model without trusting raw Ariston states."""
+    """Migruj pierwotny model v0.1 bez ufania surowym stanom Ariston."""
     migrated = default_store_data()
     migrated["pending_meter_m3"] = data.get("pending_meter_m3")
 
@@ -80,7 +80,7 @@ def _migrate_v1(data: dict[str, Any]) -> dict[str, Any]:
 
 
 class DuonGazStore(Store[dict[str, Any]]):
-    """Versioned DUON Gaz storage."""
+    """Wersjonowany magazyn danych DUON Gaz."""
 
     def __init__(self, hass) -> None:
         super().__init__(hass, STORAGE_VERSION, STORAGE_KEY)
