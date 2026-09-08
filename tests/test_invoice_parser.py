@@ -22,6 +22,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+DuonInvoiceParseError = MODULE.DuonInvoiceParseError
 is_trusted_billing_reading = MODULE.is_trusted_billing_reading
 parse_invoice_text = MODULE.parse_invoice_text
 
@@ -122,6 +123,18 @@ class TestParserFakturyDuon(unittest.TestCase):
         self.assertAlmostEqual(invoice.gas_rate_net_pln_kwh, 0.175)
         self.assertAlmostEqual(invoice.distribution_fixed_net_pln, 7.0)
         self.assertAlmostEqual(invoice.distribution_variable_net_pln_kwh, 0.025)
+
+    def test_rozne_wspolczynniki_konwersji_blokuja_import(self) -> None:
+        text = FAKTURA_DWIE_STAWKI.replace(
+            "Należność za gaz E (10,00 KWH/M3 * 15 M3)",
+            "Należność za gaz E (10,50 KWH/M3 * 15 M3)",
+        )
+
+        with self.assertRaisesRegex(
+            DuonInvoiceParseError,
+            "różne współczynniki konwersji",
+        ):
+            parse_invoice_text(text)
 
     def test_tylko_rozliczeniowy_jest_zaufana_kotwica(self) -> None:
         self.assertTrue(is_trusted_billing_reading("Rozliczeniowy"))
