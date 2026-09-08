@@ -1,4 +1,4 @@
-"""Merge settled and provisional DUON canonical hourly history."""
+"""Merge and select canonical DUON hourly history."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -78,3 +78,22 @@ def merge_canonical_hours(
         hours=tuple(merged),
         overlap_hour_count=overlap_hour_count,
     )
+
+
+def select_provisional_refresh_hours(
+    combined_hours: Iterable[CanonicalHour],
+    provisional_hours: Iterable[CanonicalHour],
+) -> tuple[CanonicalHour, ...]:
+    """Return the smallest Recorder slice that can refresh the open tail.
+
+    If the newest physical meter anchor falls inside an hour, the first
+    provisional hour shares its start with the final settled hour. The combined
+    row for that boundary hour must therefore be rewritten together with all
+    later provisional rows.
+    """
+    provisional = tuple(provisional_hours)
+    if not provisional:
+        return ()
+
+    refresh_start = provisional[0].start
+    return tuple(row for row in combined_hours if row.start >= refresh_start)
