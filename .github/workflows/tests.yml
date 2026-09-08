@@ -21,5 +21,8 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Sprawdź składnię integracji
+        run: python -m compileall -q custom_components/duon_gaz
+
       - name: Uruchom testy
         run: python -m unittest discover -s tests -v
