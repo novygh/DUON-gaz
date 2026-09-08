@@ -1,0 +1,184 @@
+name: Jednorazowa poprawka modelu kroczącego
+
+on:
+  push:
+    branches:
+      - feature/conversion-audit
+    paths:
+      - .github/workflows/patch-conversion-audit-walkforward.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/conversion-audit
+
+      - name: Zmień audyt na ocenę kroczącą bez przecieku ocenianej faktury
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("custom_components/duon_gaz/conversion_audit.py")
+          text = path.read_text(encoding="utf-8")
+          marker = "\ndef build_conversion_audit(\n"
+          if marker not in text:
+              raise SystemExit("Nie znaleziono funkcji build_conversion_audit")
+          prefix = text.split(marker, 1)[0]
+          function = r'''
+def build_conversion_audit(
+    hours: Iterable[Any],
+    billing_periods: Iterable[dict[str, Any]],
+    *,
+    timezone: tzinfo,
+) -> ConversionAuditResult:
+    """Porównaj faktury z kroczącym lokalnym modelem energii Ariston.
+
+    Pierwsze okresy tworzą bazę CO/CWU. Każda kolejna faktura jest oceniana
+    wyłącznie modelem dopasowanym do wcześniejszych okresów, więc oceniana
+    faktura nie może sama zmniejszyć własnego odchylenia. Po ocenie staje się
+    częścią historii uczącej dla następnych okresów.
+
+    Model nie jest pomiarem laboratoryjnym ciepła spalania i służy wyłącznie
+    do diagnostyki zmian relacji faktura DUON <-> lokalne dane Ariston.
+    """
+    rows = sorted(list(hours), key=lambda row: row.start)
+    if len(rows) < 2:
+        raise ConversionAuditError("Brak historii kanonicznej do audytu konwersji.")
+
+    periods = [item for item in billing_periods if isinstance(item, dict)]
+    periods.sort(
+        key=lambda item: str(
+            (item.get("current_reading") or {}).get("date") or ""
+        )
+    )
+
+    samples: list[_AuditSample] = []
+    skipped_outside_or_incomplete = 0
+    skipped_invalid = 0
+    for period in periods:
+        try:
+            sample = _sample_from_period(rows, period, timezone)
+        except ConversionAuditError:
+            skipped_invalid += 1
+            continue
+        if sample is None:
+            skipped_outside_or_incomplete += 1
+            continue
+        samples.append(sample)
+
+    required = _MIN_MODEL_SAMPLES + 1
+    if len(samples) < required:
+        raise ConversionAuditError(
+            "Za mało pełnych okresów do kroczącego audytu konwersji: "
+            f"{len(samples)} < {required}."
+        )
+
+    history: list[dict[str, Any]] = []
+    cumulative_pln = 0.0
+    latest_model: tuple[float, float, float] | None = None
+
+    for index in range(_MIN_MODEL_SAMPLES, len(samples)):
+        sample = samples[index]
+        co_coeff, dhw_coeff, mae_kwh = _robust_fit(samples[:index])
+        latest_model = (co_coeff, dhw_coeff, mae_kwh)
+
+        predicted_kwh = (
+            co_coeff * sample.heating_kwh
+            + dhw_coeff * sample.dhw_kwh
+        )
+        if predicted_kwh <= _EPSILON:
+            continue
+
+        residual_kwh = sample.billed_kwh - predicted_kwh
+        delta_pln = residual_kwh * sample.gross_variable_rate_pln_kwh
+        cumulative_pln += delta_pln
+        local_factor = predicted_kwh / sample.consumption_m3
+        raw_local_yield = (
+            sample.heating_kwh + sample.dhw_kwh
+        ) / sample.consumption_m3
+        apparent_efficiency = (
+            (sample.heating_kwh + sample.dhw_kwh) / sample.billed_kwh * 100.0
+        )
+        factor_diff_percent = (
+            (sample.invoice_factor_kwh_m3 / local_factor - 1.0) * 100.0
+        )
+
+        history.append(
+            {
+                "invoice_number": sample.invoice_number,
+                "start": sample.start.isoformat(),
+                "end": sample.end.isoformat(),
+                "training_sample_count": index,
+                "model_co_multiplier": round(co_coeff, 9),
+                "model_dhw_multiplier": round(dhw_coeff, 9),
+                "model_mae_kwh": round(mae_kwh, 6),
+                "duon_kwh_m3": round(sample.invoice_factor_kwh_m3, 6),
+                "local_model_kwh_m3": round(local_factor, 6),
+                "raw_ariston_kwh_m3": round(raw_local_yield, 6),
+                "apparent_efficiency_percent": round(apparent_efficiency, 4),
+                "factor_difference_percent": round(factor_diff_percent, 4),
+                "difference_kwh": round(residual_kwh, 6),
+                "difference_pln": round(delta_pln, 6),
+                "cumulative_pln": round(cumulative_pln, 6),
+                "reconstructed_gap_hours": sample.reconstructed_gap_hours,
+            }
+        )
+
+    if not history or latest_model is None:
+        raise ConversionAuditError(
+            "Audyt konwersji nie utworzył żadnego punktu oceny."
+        )
+
+    co_coeff, dhw_coeff, mae_kwh = latest_model
+    last = history[-1]
+    return ConversionAuditResult(
+        data={
+            "status": "ok",
+            "method": "walk_forward_robust_two_component_local_energy_model",
+            "sample_count": len(samples),
+            "baseline_sample_count": _MIN_MODEL_SAMPLES,
+            "evaluated_count": len(history),
+            "model_training_sample_count": last["training_sample_count"],
+            "model_co_billed_kwh_per_ariston_kwh": round(co_coeff, 9),
+            "model_dhw_billed_kwh_per_ariston_kwh": round(dhw_coeff, 9),
+            "model_co_apparent_efficiency_percent": round(100.0 / co_coeff, 4),
+            "model_dhw_apparent_efficiency_percent": round(100.0 / dhw_coeff, 4),
+            "model_mae_kwh": round(mae_kwh, 6),
+            "skipped_outside_or_incomplete_count": skipped_outside_or_incomplete,
+            "skipped_invalid_count": skipped_invalid,
+            "cumulative_difference_pln": round(cumulative_pln, 6),
+            "last_difference_pln": last["difference_pln"],
+            "last_duon_kwh_m3": last["duon_kwh_m3"],
+            "last_local_model_kwh_m3": last["local_model_kwh_m3"],
+            "last_raw_ariston_kwh_m3": last["raw_ariston_kwh_m3"],
+            "last_apparent_efficiency_percent": last[
+                "apparent_efficiency_percent"
+            ],
+            "last_factor_difference_percent": last[
+                "factor_difference_percent"
+            ],
+            "last_start": last["start"],
+            "last_end": last["end"],
+            "history": history,
+        }
+    )
+'''
+          path.write_text(prefix + function, encoding="utf-8")
+          PY
+
+      - name: Usuń workflow i zapisz zmianę
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/patch-conversion-audit-walkforward.yml
+          git add custom_components/duon_gaz/conversion_audit.py
+          git commit -m "Zastosuj kroczący model audytu konwersji"
+          git push origin HEAD:feature/conversion-audit
