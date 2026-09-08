@@ -38,6 +38,8 @@ def default_store_data() -> dict[str, Any]:
         "billing_periods": [],
         "corrections": [],
         "processed_invoices": [],
+        "processed_messages": [],
+        "last_outlook_sync": None,
         "totals": {
             "provisional_energy_kwh": 0.0,
             "provisional_variable_cost_gross": 0.0,
