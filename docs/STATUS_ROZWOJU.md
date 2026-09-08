@@ -5,7 +5,7 @@ Dokument opisuje stan gałęzi rozwojowej `feature/store-v2-recorder-sums` i pla
 Aktualny etap: **0.3.4 — historia kanoniczna, faktury PDF i automatyczny import z Microsoft Outlook / Graph**.
 
 > [!IMPORTANT]
-> Gałąź rozwojowa i PR #1 nadal pozostają wersją roboczą. Główna ścieżka danych została zweryfikowana na działającej instalacji, ale przed scaleniem do `main` pozostaje dokończenie obsługi reautoryzacji Outlook w UI, przegląd dokumentacji oraz końcowy przegląd PR.
+> Gałąź rozwojowa i PR #1 nadal pozostają wersją roboczą. Główna ścieżka danych oraz ręczna reautoryzacja Outlook w UI zostały zweryfikowane na działającej instalacji. Przed scaleniem do `main` pozostają finalizacja README/release notes oraz końcowy przegląd PR.
 
 ## Architektura danych
 
@@ -164,11 +164,19 @@ Dzięki temu może pozostać częścią audytu i historii fizycznej, ale nie mo�
 
 Kod potrafi automatycznie rozpocząć reauth po błędzie tokenu lub autoryzacji Graph.
 
-Pozostałym zadaniem przed wydaniem 0.3.4 jest zapewnienie użytkownikowi prostej, jednoznacznej ścieżki **Połącz ponownie Outlook** bez terminala, plików i wchodzenia do Microsoft Entra.
+Ręczna ścieżka została dodana do opcji integracji Home Assistanta:
+
+- **Konfiguruj → Źródła i parametry rozliczeniowe** — dotychczasowa edycja konfiguracji,
+- **Konfiguruj → Połącz ponownie Outlook** — uruchamia natywny flow reautoryzacji wpisu,
+- reauth korzysta z tego samego Microsoft Device Code Flow co konfiguracja Outlook,
+- nie wymaga terminala, plików ani ponownego wchodzenia do Microsoft Entra,
+- po poprawnym logowaniu token jest zastępowany, a wpis DUON Gaz przeładowywany.
+
+Ścieżka została zweryfikowana na działającej instalacji: obie opcje menu były widoczne, a **Połącz ponownie Outlook** poprawnie przeprowadziło użytkownika przez Device Code Flow.
 
 ## Stan testów 0.3.4
 
-Aktualny zestaw CI zawiera **23 testy jednostkowe** i przechodzi w całości.
+Aktualny zestaw CI zawiera **23 testy jednostkowe** i przechodzi w całości. CI dodatkowo kompiluje cały katalog `custom_components/duon_gaz`, dzięki czemu błędy składni także w modułach niewczytywanych przez testy jednostkowe blokują zmianę.
 
 Zakres obejmuje między innymi:
 
@@ -203,16 +211,16 @@ Potwierdzono:
 - zapis i weryfikację całej historii `duon_gaz:canonical_gas` w Recorder,
 - dokładne domknięcie części rozliczonej do gazomierza,
 - brak ujemnego zużycia i nierozliczonych rollbacków,
-- zachowanie surowych statystyk CO/CWU bez modyfikacji.
+- zachowanie surowych statystyk CO/CWU bez modyfikacji,
+- ręczne uruchomienie ponownego połączenia Outlook z UI oraz poprawne zakończenie Device Code Flow.
 
 ## Plan dalszych prac
 
-1. Dodać prostą ręczną ścieżkę **Połącz ponownie Outlook** w UI Home Assistanta.
-2. Dodać lub uzupełnić testy przepływu reautoryzacji Device Code tam, gdzie można to zrobić bez zależności od prawdziwego konta Microsoft.
-3. Uzupełnić README i release notes o finalne zachowanie 0.3.4.
-4. Wykonać końcowy przegląd PR #1 i pozostawić go jako Draft do zakończenia powyższych punktów.
-5. Po stabilizacji rozważyć scalenie do `main`.
-6. Kolejne osobne etapy: SMS oraz finalna konfiguracja Energy Dashboard.
+1. Dodać lub uzupełnić testy przepływu reautoryzacji Device Code tam, gdzie można to zrobić bez zależności od prawdziwego konta Microsoft.
+2. Uzupełnić README i release notes o finalne zachowanie 0.3.4.
+3. Wykonać końcowy przegląd PR #1 i pozostawić go jako Draft do zakończenia powyższych punktów.
+4. Po stabilizacji rozważyć scalenie do `main`.
+5. Kolejne osobne etapy: SMS oraz finalna konfiguracja Energy Dashboard.
 
 ## Zasady bezpieczeństwa dalszych prac
 
