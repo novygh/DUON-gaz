@@ -1,4 +1,4 @@
-"""DUON invoice PDF parser."""
+"""Parser faktur PDF DUON."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -10,12 +10,12 @@ from typing import Any
 
 
 class DuonInvoiceParseError(ValueError):
-    """Raised when a DUON invoice cannot be parsed safely."""
+    """Błąd bezpiecznego przetwarzania faktury DUON."""
 
 
 @dataclass(frozen=True, slots=True)
 class DuonInvoiceReading:
-    """One meter indication printed on an invoice."""
+    """Jedno wskazanie gazomierza wydrukowane na fakturze."""
 
     reading_type: str
     date: date
@@ -24,7 +24,7 @@ class DuonInvoiceReading:
 
 @dataclass(frozen=True, slots=True)
 class DuonInvoice:
-    """Normalized DUON invoice data used by the integration."""
+    """Znormalizowane dane faktury DUON używane przez integrację."""
 
     invoice_number: str
     period_start: date
@@ -47,7 +47,7 @@ class DuonInvoice:
     gross_total_pln: float
 
     def as_dict(self) -> dict[str, Any]:
-        """Return a Store-safe JSON-compatible representation."""
+        """Zwróć reprezentację zgodną z JSON i magazynem danych."""
         data = asdict(self)
         for key in ("period_start", "period_end", "issue_date", "due_date"):
             data[key] = data[key].isoformat()
@@ -57,16 +57,16 @@ class DuonInvoice:
 
 
 def normalize_reading_type(value: str) -> str:
-    """Normalize the literal DUON reading type without changing its meaning."""
+    """Znormalizuj literalny typ odczytu DUON bez zmiany jego znaczenia."""
     return " ".join(value.strip().lower().split())
 
 
 def is_trusted_billing_reading(value: str) -> bool:
-    """Return whether the observed DUON label is eligible as a meter anchor.
+    """Sprawdź, czy typ odczytu może być użyty jako kotwica gazomierza.
 
-    'Rozliczeniowy' is the literal label observed on real DUON invoices. It is
-    intentionally not translated to 'incasent' because the invoice does not say
-    who physically obtained the reading.
+    „Rozliczeniowy” jest literalnym określeniem widocznym na fakturach DUON.
+    Nie zamieniamy go na „inkasencki”, ponieważ faktura nie podaje, kto
+    fizycznie wykonał odczyt.
     """
     return normalize_reading_type(value) == "rozliczeniowy"
 
@@ -95,7 +95,7 @@ def _one(pattern: str, text: str, field: str, flags: int = 0) -> re.Match[str]:
 
 
 def extract_invoice_text(path: str | Path, password: str) -> str:
-    """Decrypt a DUON PDF and extract its text without OCR."""
+    """Odszyfruj fakturę DUON i pobierz tekst bez użycia OCR."""
     try:
         from pypdf import PdfReader
     except ImportError as err:
@@ -114,7 +114,7 @@ def extract_invoice_text(path: str | Path, password: str) -> str:
 
 
 def parse_invoice_text(text: str) -> DuonInvoice:
-    """Parse text extracted from the current DUON invoice layout."""
+    """Przetwórz tekst z aktualnego układu faktury DUON."""
     invoice_number = _one(
         r"Faktura VAT nr\s+(\d+)", text, "invoice_number"
     ).group(1)
@@ -244,5 +244,5 @@ def parse_invoice_text(text: str) -> DuonInvoice:
 
 
 def parse_invoice_pdf(path: str | Path, password: str) -> DuonInvoice:
-    """Decrypt and parse one DUON invoice PDF."""
+    """Odszyfruj i przetwórz jedną fakturę PDF DUON."""
     return parse_invoice_text(extract_invoice_text(path, password))
