@@ -529,6 +529,7 @@ class DuonGazRuntime:
         timestamp_precision: str = "day",
         meter_precision_m3: float = 1.0,
         exclude_from_calibration: bool = DEFAULT_INVOICE_EXCLUDE_FROM_CALIBRATION,
+        persist: bool = True,
     ) -> bool:
         """Add a trusted billing meter indication originating from an invoice.
 
@@ -568,8 +569,9 @@ class DuonGazRuntime:
                     "shadowed_by_manual_timestamp": shadow.get("timestamp"),
                 }
             )
-            await self.async_save()
-            self.async_notify()
+            if persist:
+                await self.async_save()
+                self.async_notify()
             return False
 
         previous, following = self._trusted_neighbors(parsed)
@@ -598,8 +600,9 @@ class DuonGazRuntime:
                     },
                 }
             )
-            await self.async_save()
-            self.async_notify()
+            if persist:
+                await self.async_save()
+                self.async_notify()
             return False
 
         snapshot = await async_get_recorder_snapshot_at(
@@ -641,9 +644,10 @@ class DuonGazRuntime:
                 self._add_settled_delta(meter - old_meter)
 
         self._recalculate_calibration()
-        await self.async_save()
-        await self.async_refresh_source_snapshot(notify=False)
-        self.async_notify()
+        if persist:
+            await self.async_save()
+            await self.async_refresh_source_snapshot(notify=False)
+            self.async_notify()
         return True
 
     def current_source_delta_kwh(self) -> tuple[float, float]:
