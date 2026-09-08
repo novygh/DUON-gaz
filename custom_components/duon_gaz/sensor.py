@@ -239,7 +239,7 @@ class DuonConversionSensor(DuonBaseSensor):
 
 
 class DuonConversionAuditSensor(DuonBaseSensor):
-    """Informacyjny bilans faktury względem lokalnego modelu energii Ariston."""
+    """Informacyjny bilans dryfu faktury względem lokalnej relacji Ariston."""
 
     _attr_name = "Audyt współczynnika konwersji"
     _attr_unique_id = "duon_gaz_conversion_audit"
@@ -280,10 +280,15 @@ class DuonConversionAuditSensor(DuonBaseSensor):
     async def _async_refresh_audit(self, fingerprint) -> None:
         try:
             build = await async_build_canonical_bundle(self.runtime)
+            calibration = self.runtime.data.get("calibration", {})
             result = build_conversion_audit(
-                build.combined.hours,
+                build.settled.intervals,
                 self.runtime.data.get("billing_periods", []),
+                self.runtime._manual_readings(),
                 timezone=dt_util.DEFAULT_TIME_ZONE,
+                calibration_co_m3_per_kwh=self.runtime.co_m3_per_kwh,
+                calibration_dhw_m3_per_kwh=self.runtime.dhw_m3_per_kwh,
+                calibration_mae_m3=calibration.get("mae_m3"),
             )
             self._audit = result.data
         except (ConversionAuditError, ValueError, RuntimeError) as err:
@@ -343,8 +348,11 @@ class DuonConversionAuditSensor(DuonBaseSensor):
                 "roznica_pln": item["difference_pln"],
                 "duon_kwh_m3": item["duon_kwh_m3"],
                 "lokalny_model_kwh_m3": item["local_model_kwh_m3"],
-                "lokalny_ariston_kwh_m3": item["raw_ariston_kwh_m3"],
+                "referencja_kwh_m3": item["reference_kwh_m3"],
+                "lokalny_wskaznik_proc": item["local_yield_percent"],
                 "roznica_proc": item["factor_difference_percent"],
+                "zuzycie_faktura_m3": item["billed_consumption_m3"],
+                "zuzycie_lokalne_m3": item["physical_consumption_m3"],
                 "luki_godziny": item["reconstructed_gap_hours"],
             }
             for item in self._audit.get("history", [])
@@ -353,45 +361,45 @@ class DuonConversionAuditSensor(DuonBaseSensor):
             "informacyjny": True,
             "uzywany_do_rozliczen": False,
             "interpretacja": (
-                "Wartość dodatnia oznacza większy koszt zmienny energii na fakturach "
-                "niż przewiduje lokalny model Ariston CO/CWU; wartość ujemna oznacza "
-                "mniejszy koszt. To wskaźnik diagnostyczny, nie laboratoryjny pomiar "
-                "ciepła spalania ani dowód nieprawidłowego rozliczenia."
+                "Wartość dodatnia oznacza, że współczynnik DUON dał większy koszt "
+                "zmienny niż wynika z historycznej relacji lokalnego profilu Ariston "
+                "do gazomierza; wartość ujemna oznacza mniejszy. Audyt wykrywa dryf "
+                "względem własnej historii. Nie mierzy bezwzględnego ciepła spalania "
+                "i nie jest dowodem nieprawidłowego rozliczenia."
             ),
             "metoda": self._audit.get("method"),
             "liczba_okresow": self._audit.get("sample_count"),
-            "model_co_mnoznik": self._audit.get(
-                "model_co_billed_kwh_per_ariston_kwh"
+            "liczba_okresow_referencji": self._audit.get("reference_sample_count"),
+            "referencja_kwh_m3": self._audit.get("reference_factor_kwh_m3"),
+            "referencja_min_kwh_m3": self._audit.get(
+                "reference_candidate_min_kwh_m3"
             ),
-            "model_cwu_mnoznik": self._audit.get(
-                "model_dhw_billed_kwh_per_ariston_kwh"
+            "referencja_max_kwh_m3": self._audit.get(
+                "reference_candidate_max_kwh_m3"
             ),
-            "model_co_sprawnosc_pozorna_proc": self._audit.get(
-                "model_co_apparent_efficiency_percent"
+            "kalibracja_co_m3_kwh": self._audit.get(
+                "calibration_co_m3_per_kwh"
             ),
-            "model_cwu_sprawnosc_pozorna_proc": self._audit.get(
-                "model_dhw_apparent_efficiency_percent"
+            "kalibracja_cwu_m3_kwh": self._audit.get(
+                "calibration_dhw_m3_per_kwh"
             ),
-            "model_mae_kwh": self._audit.get("model_mae_kwh"),
+            "kalibracja_mae_m3": self._audit.get("calibration_mae_m3"),
             "ostatni_odczyt_od": self._audit.get("last_start"),
             "ostatni_odczyt_do": self._audit.get("last_end"),
             "ostatni_duon_kwh_m3": self._audit.get("last_duon_kwh_m3"),
             "ostatni_lokalny_model_kwh_m3": self._audit.get(
                 "last_local_model_kwh_m3"
             ),
-            "ostatni_lokalny_ariston_kwh_m3": self._audit.get(
-                "last_raw_ariston_kwh_m3"
-            ),
-            "ostatnia_sprawnosc_pozorna_proc": self._audit.get(
-                "last_apparent_efficiency_percent"
+            "ostatni_lokalny_wskaznik_proc": self._audit.get(
+                "last_local_yield_percent"
             ),
             "ostatnia_roznica_proc": self._audit.get(
                 "last_factor_difference_percent"
             ),
             "ostatnia_roznica_pln": self._audit.get("last_difference_pln"),
             "saldo_pln": self._audit.get("cumulative_difference_pln"),
-            "pominiete_poza_historia_lub_niepelne": self._audit.get(
-                "skipped_outside_or_incomplete_count"
+            "pominiete_bez_dwoch_dokladnych_odczytow": self._audit.get(
+                "skipped_without_exact_manual_bounds_count"
             ),
             "pominiete_nieprawidlowe": self._audit.get("skipped_invalid_count"),
             "historia": history,
