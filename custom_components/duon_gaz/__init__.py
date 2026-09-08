@@ -14,7 +14,6 @@ from homeassistant.exceptions import (
     HomeAssistantError,
     OAuth2TokenRequestError,
     OAuth2TokenRequestReauthError,
-    UnknownImplementationError,
 )
 from homeassistant.helpers import config_entry_oauth2_flow, config_validation as cv
 from homeassistant.helpers.event import async_call_later, async_track_time_change
@@ -106,7 +105,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DuonGazConfigEntry) -> b
                     hass, entry
                 )
             )
-        except UnknownImplementationError as err:
+        except ValueError as err:
+            # HA 2026.8 zgłasza ValueError, a nowsze wersje używają
+            # UnknownImplementationError dziedziczącego po ValueError.
             _LOGGER.warning(
                 "Nie można uruchomić automatyzacji Outlook DUON Gaz: %s", err
             )
