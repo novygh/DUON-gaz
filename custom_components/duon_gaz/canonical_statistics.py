@@ -24,6 +24,7 @@ from .canonical_builder import CanonicalBuild, async_build_canonical_bundle
 from .canonical_history import CanonicalHistoryError, CanonicalHour
 from .canonical_series import select_provisional_refresh_hours
 from .const import DOMAIN
+from .publication_rules import active_anchor_fingerprint, active_anchor_set_changed
 
 CANONICAL_GAS_STATISTIC_ID = f"{DOMAIN}:canonical_gas"
 _PUBLISH_LOCKS: dict[str, asyncio.Lock] = {}
@@ -188,6 +189,13 @@ def _publication_requires_full_rebuild(
     build: CanonicalBuild,
 ) -> str | None:
     """Return why an incremental tail refresh is unsafe, if anything."""
+    active_readings = runtime._readings()
+    if active_anchor_set_changed(
+        publication.get("active_anchor_fingerprint"),
+        active_readings,
+    ):
+        return "physical_anchor_set_changed"
+
     if publication.get("settled_through") != build.summary.get("end"):
         return "physical_anchor_changed"
 
@@ -237,6 +245,7 @@ def _publication_record(
 ) -> dict[str, Any]:
     combined = build.combined.hours
     calibration = runtime.data.get("calibration", {})
+    active_readings = runtime._readings()
     return {
         "status": "publishing",
         "mode": mode,
@@ -257,6 +266,8 @@ def _publication_record(
         "first_sum_m3": round(combined[0].cumulative_m3, 9),
         "last_sum_m3": round(combined[-1].cumulative_m3, 9),
         "settled_through": build.summary["end"],
+        "active_anchor_count": len(active_readings),
+        "active_anchor_fingerprint": active_anchor_fingerprint(active_readings),
         "heating_entity": runtime.heating_entity,
         "dhw_entity": runtime.dhw_entity,
         "calibration_co_m3_per_kwh": runtime.co_m3_per_kwh,
