@@ -11,8 +11,13 @@ from homeassistant.const import UnitOfEnergy, UnitOfVolume
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
+from .canonical_builder import async_build_canonical_bundle
+from .canonical_costs import billing_period_fingerprint
 from .const import DOMAIN
+from .conversion_audit import ConversionAuditError, build_conversion_audit
+from .publication_rules import active_anchor_fingerprint
 from .runtime import DuonGazRuntime
 
 
@@ -76,6 +81,7 @@ async def async_setup_entry(
             DuonCurrentHeatingSensor(runtime),
             DuonCurrentDhwSensor(runtime),
             DuonConversionSensor(runtime),
+            DuonConversionAuditSensor(runtime),
             DuonCalibrationSensor(runtime),
             DuonHeatingCalibrationSensor(runtime),
             DuonDhwCalibrationSensor(runtime),
@@ -230,6 +236,166 @@ class DuonConversionSensor(DuonBaseSensor):
     @property
     def native_unit_of_measurement(self):
         return "kWh/m³"
+
+
+class DuonConversionAuditSensor(DuonBaseSensor):
+    """Informacyjny bilans faktury względem lokalnego modelu energii Ariston."""
+
+    _attr_name = "Audyt współczynnika konwersji"
+    _attr_unique_id = "duon_gaz_conversion_audit"
+    _attr_icon = "mdi:scale-balance"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = "PLN"
+    _attr_should_poll = False
+
+    def __init__(self, runtime: DuonGazRuntime) -> None:
+        super().__init__(runtime)
+        self._audit: dict | None = None
+        self._audit_fingerprint = None
+        self._audit_unsub = None
+        self._audit_task = None
+
+    def _current_audit_fingerprint(self):
+        return (
+            billing_period_fingerprint(self.runtime.data.get("billing_periods", [])),
+            active_anchor_fingerprint(self.runtime._readings()),
+            self.runtime.heating_entity,
+            self.runtime.dhw_entity,
+            self.runtime.co_m3_per_kwh,
+            self.runtime.dhw_m3_per_kwh,
+        )
+
+    @callback
+    def _schedule_audit_refresh(self) -> None:
+        fingerprint = self._current_audit_fingerprint()
+        if fingerprint == self._audit_fingerprint:
+            return
+        if self._audit_task is not None and not self._audit_task.done():
+            return
+        self._audit_task = self.hass.async_create_task(
+            self._async_refresh_audit(fingerprint)
+        )
+
+    async def _async_refresh_audit(self, fingerprint) -> None:
+        try:
+            build = await async_build_canonical_bundle(self.runtime)
+            result = build_conversion_audit(
+                build.combined.hours,
+                self.runtime.data.get("billing_periods", []),
+                timezone=dt_util.DEFAULT_TIME_ZONE,
+            )
+            self._audit = result.data
+        except (ConversionAuditError, ValueError, RuntimeError) as err:
+            self._audit = {
+                "status": "unavailable",
+                "error": str(err),
+            }
+        self._audit_fingerprint = fingerprint
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        @callback
+        def _recalculate(_event: Event) -> None:
+            self._schedule_audit_refresh()
+
+        self._audit_unsub = self.hass.bus.async_listen(
+            f"{self.runtime.entry_id}_duon_gaz_update", _recalculate
+        )
+        self._schedule_audit_refresh()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._audit_unsub:
+            self._audit_unsub()
+            self._audit_unsub = None
+        await super().async_will_remove_from_hass()
+
+    @property
+    def available(self) -> bool:
+        return bool(self._audit and self._audit.get("status") == "ok")
+
+    @property
+    def native_value(self):
+        if not self.available:
+            return None
+        return round(float(self._audit["cumulative_difference_pln"]), 2)
+
+    @property
+    def extra_state_attributes(self):
+        if not isinstance(self._audit, dict):
+            return {
+                "informacyjny": True,
+                "status": "oczekiwanie na obliczenie",
+            }
+        if self._audit.get("status") != "ok":
+            return {
+                "informacyjny": True,
+                "status": "niedostępny",
+                "blad": self._audit.get("error"),
+            }
+
+        history = [
+            {
+                "czas": item["end"],
+                "saldo_pln": item["cumulative_pln"],
+                "roznica_pln": item["difference_pln"],
+                "duon_kwh_m3": item["duon_kwh_m3"],
+                "lokalny_model_kwh_m3": item["local_model_kwh_m3"],
+                "lokalny_ariston_kwh_m3": item["raw_ariston_kwh_m3"],
+                "roznica_proc": item["factor_difference_percent"],
+                "luki_godziny": item["reconstructed_gap_hours"],
+            }
+            for item in self._audit.get("history", [])
+        ]
+        return {
+            "informacyjny": True,
+            "uzywany_do_rozliczen": False,
+            "interpretacja": (
+                "Wartość dodatnia oznacza większy koszt zmienny energii na fakturach "
+                "niż przewiduje lokalny model Ariston CO/CWU; wartość ujemna oznacza "
+                "mniejszy koszt. To wskaźnik diagnostyczny, nie laboratoryjny pomiar "
+                "ciepła spalania ani dowód nieprawidłowego rozliczenia."
+            ),
+            "metoda": self._audit.get("method"),
+            "liczba_okresow": self._audit.get("sample_count"),
+            "model_co_mnoznik": self._audit.get(
+                "model_co_billed_kwh_per_ariston_kwh"
+            ),
+            "model_cwu_mnoznik": self._audit.get(
+                "model_dhw_billed_kwh_per_ariston_kwh"
+            ),
+            "model_co_sprawnosc_pozorna_proc": self._audit.get(
+                "model_co_apparent_efficiency_percent"
+            ),
+            "model_cwu_sprawnosc_pozorna_proc": self._audit.get(
+                "model_dhw_apparent_efficiency_percent"
+            ),
+            "model_mae_kwh": self._audit.get("model_mae_kwh"),
+            "ostatni_odczyt_od": self._audit.get("last_start"),
+            "ostatni_odczyt_do": self._audit.get("last_end"),
+            "ostatni_duon_kwh_m3": self._audit.get("last_duon_kwh_m3"),
+            "ostatni_lokalny_model_kwh_m3": self._audit.get(
+                "last_local_model_kwh_m3"
+            ),
+            "ostatni_lokalny_ariston_kwh_m3": self._audit.get(
+                "last_raw_ariston_kwh_m3"
+            ),
+            "ostatnia_sprawnosc_pozorna_proc": self._audit.get(
+                "last_apparent_efficiency_percent"
+            ),
+            "ostatnia_roznica_proc": self._audit.get(
+                "last_factor_difference_percent"
+            ),
+            "ostatnia_roznica_pln": self._audit.get("last_difference_pln"),
+            "saldo_pln": self._audit.get("cumulative_difference_pln"),
+            "pominiete_poza_historia_lub_niepelne": self._audit.get(
+                "skipped_outside_or_incomplete_count"
+            ),
+            "pominiete_nieprawidlowe": self._audit.get("skipped_invalid_count"),
+            "historia": history,
+        }
 
 
 class DuonCalibrationSensor(DuonBaseSensor):
