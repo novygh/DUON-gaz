@@ -13,6 +13,7 @@ from .canonical_history import (
     SourcePoint,
     build_canonical_history,
 )
+from .canonical_tail import build_provisional_tail
 from .recorder_stats import async_get_hourly_recorder_series
 
 
@@ -97,12 +98,16 @@ async def async_build_canonical_history(
     if heating_coeff is None or dhw_coeff is None:
         raise CanonicalHistoryError("Brak współczynników kalibracji CO/CWU.")
 
+    fetch_end = max(
+        all_anchors[-1].timestamp + timedelta(hours=2),
+        dt_util.utcnow() + timedelta(hours=1),
+    )
     snapshots = await async_get_hourly_recorder_series(
         runtime.hass,
         runtime.heating_entity,
         runtime.dhw_entity,
         all_anchors[0].timestamp - timedelta(hours=2),
-        all_anchors[-1].timestamp + timedelta(hours=2),
+        fetch_end,
     )
     source_points = [
         SourcePoint(
@@ -130,6 +135,13 @@ async def async_build_canonical_history(
     result = build_canonical_history(
         source_points,
         anchors,
+        heating_m3_per_kwh=heating_coeff,
+        dhw_m3_per_kwh=dhw_coeff,
+        timezone=dt_util.DEFAULT_TIME_ZONE,
+    )
+    tail = build_provisional_tail(
+        source_points,
+        anchors[-1],
         heating_m3_per_kwh=heating_coeff,
         dhw_m3_per_kwh=dhw_coeff,
         timezone=dt_util.DEFAULT_TIME_ZONE,
@@ -188,6 +200,23 @@ async def async_build_canonical_history(
         "scale_factor_min": None if not scales else round(min(scales), 9),
         "scale_factor_max": None if not scales else round(max(scales), 9),
         "audit_intervals": _interval_audit(result),
+        "provisional_hour_count": len(tail.hours),
+        "provisional_start": (
+            tail.hours[0].start.isoformat() if tail.hours else None
+        ),
+        "provisional_end": tail.source_end.isoformat(),
+        "provisional_m3": round(tail.gas_m3, 6),
+        "provisional_meter_m3": round(tail.estimated_meter_m3, 6),
+        "provisional_reconstructed_gap_hours": tail.reconstructed_gap_hours,
+        "provisional_rollback_correction_kwh": round(
+            tail.rollback_correction_kwh, 6
+        ),
+        "provisional_rollback_retracted_kwh": round(
+            tail.rollback_retracted_kwh, 6
+        ),
+        "provisional_unresolved_rollback_kwh": round(
+            tail.unresolved_rollback_kwh, 6
+        ),
     }
     return result, summary
 
