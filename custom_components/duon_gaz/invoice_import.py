@@ -73,12 +73,16 @@ async def async_import_invoice(
     *,
     source_message_id: str | None = None,
     source_attachment_name: str | None = None,
+    persist: bool = True,
 ) -> dict[str, Any]:
     """Zapisz jedną fakturę i opcjonalnie utwórz kotwicę gazomierza.
 
     Dane rozliczeniowe są zachowywane zawsze. Tylko typ odczytu jawnie
     sklasyfikowany przez parser jako zaufany może uczestniczyć w modelu
     fizycznym. Ponowny import tego samego numeru faktury jest idempotentny.
+
+    Gdy persist=False, zmiany są wyłącznie etapowane w runtime.data. Tryb ten
+    służy do atomowego zatwierdzania całej paczki Outlook jednym zapisem Store.
     """
     processed = runtime.data.setdefault("processed_invoices", [])
     if invoice.invoice_number in _processed_invoice_numbers(processed):
@@ -103,6 +107,7 @@ async def async_import_invoice(
             # historię fizyczną, ale nie może kalibrować CO/CWU względem
             # godzinowych statystyk Recorder, bo dokładny czas jest nieznany.
             exclude_from_calibration=True,
+            persist=persist,
         )
 
     runtime.data.setdefault("billing_periods", []).append(
@@ -121,8 +126,9 @@ async def async_import_invoice(
             "anchor_added": anchor_added,
         }
     )
-    await runtime.async_save()
-    runtime.async_notify()
+    if persist:
+        await runtime.async_save()
+        runtime.async_notify()
 
     return {
         "status": "imported",
