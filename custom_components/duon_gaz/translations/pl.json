@@ -4,24 +4,45 @@
     "step": {
       "user": {
         "title": "Konfiguracja DUON Gaz",
-        "description": "Wybierz liczniki energii gazowej z integracji Ariston i podaj ostatnie znane parametry rozliczeniowe.",
+        "description": "Wybierz dwa sensory skumulowanego zużycia gazu dla CO i CWU oraz wpisz parametry rozliczeniowe z własnej umowy lub faktury.",
         "data": {
-          "heating_entity": "Ariston – gaz CO [kWh]",
-          "dhw_entity": "Ariston – gaz CWU [kWh]",
+          "heating_entity": "Źródło CO [kWh]",
+          "dhw_entity": "Źródło CWU [kWh]",
           "conversion_factor": "Współczynnik konwersji [kWh/m³]",
           "gas_rate_net": "Cena gazu netto [PLN/kWh]",
           "dist_var_rate_net": "Dystrybucja zmienna netto [PLN/kWh]",
           "subscription_net": "Abonament netto [PLN/miesiąc]",
           "dist_fixed_net": "Dystrybucja stała netto [PLN/miesiąc]",
-          "vat": "VAT (np. 0.23)"
+          "vat": "VAT jako liczba dziesiętna (np. 0.23)"
         }
       }
     },
     "error": {
-      "same_entity": "Wybierz dwa różne sensory Aristona."
+      "same_entity": "Wybierz dwa różne sensory źródłowe."
     },
     "abort": {
       "single_instance_allowed": "DUON Gaz jest już skonfigurowany."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Konfiguracja DUON Gaz",
+        "description": "Zmień sensory źródłowe CO/CWU lub parametry rozliczeniowe. Po zapisaniu integracja przeładuje się automatycznie.",
+        "data": {
+          "heating_entity": "Źródło CO [kWh]",
+          "dhw_entity": "Źródło CWU [kWh]",
+          "conversion_factor": "Współczynnik konwersji [kWh/m³]",
+          "gas_rate_net": "Cena gazu netto [PLN/kWh]",
+          "dist_var_rate_net": "Dystrybucja zmienna netto [PLN/kWh]",
+          "subscription_net": "Abonament netto [PLN/miesiąc]",
+          "dist_fixed_net": "Dystrybucja stała netto [PLN/miesiąc]",
+          "vat": "VAT jako liczba dziesiętna (np. 0.23)"
+        }
+      }
+    },
+    "error": {
+      "same_entity": "Wybierz dwa różne sensory źródłowe."
     }
   }
 }
