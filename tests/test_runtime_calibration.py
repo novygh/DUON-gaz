@@ -22,6 +22,9 @@ SPEC.loader.exec_module(MODULE)
 
 DEFAULT_INVOICE_EXCLUDE_FROM_CALIBRATION = MODULE.DEFAULT_INVOICE_EXCLUDE_FROM_CALIBRATION
 calibration_readings = MODULE.calibration_readings
+historical_invoice_without_recorder_allowed = (
+    MODULE.historical_invoice_without_recorder_allowed
+)
 migrate_invoice_calibration_flags = MODULE.migrate_invoice_calibration_flags
 
 
@@ -85,6 +88,26 @@ class TestRegulyKalibracjiRuntime(unittest.TestCase):
 
         self.assertEqual(filtered, [manual_before, manual_after])
         self.assertEqual(intervals, [(manual_before, manual_after)])
+
+    def test_brak_recorder_jest_dozwolony_tylko_dla_historycznej_kotwicy(self) -> None:
+        self.assertTrue(
+            historical_invoice_without_recorder_allowed(
+                exclude_from_calibration=True,
+                has_following_anchor=True,
+            )
+        )
+        self.assertFalse(
+            historical_invoice_without_recorder_allowed(
+                exclude_from_calibration=True,
+                has_following_anchor=False,
+            )
+        )
+        self.assertFalse(
+            historical_invoice_without_recorder_allowed(
+                exclude_from_calibration=False,
+                has_following_anchor=True,
+            )
+        )
 
 
 if __name__ == "__main__":
