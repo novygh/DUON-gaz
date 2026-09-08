@@ -82,7 +82,7 @@ def _periods(
 
 
 class ConversionAuditTests(unittest.TestCase):
-    def test_model_usuwa_stala_roznice_co_cwu_i_widzi_dodatnie_odchylenie(self):
+    def test_model_kroczacy_nie_uczy_sie_na_ocenianej_fakturze(self):
         start = datetime(2026, 1, 1, 12, tzinfo=TZ)
         mixes = [
             (120.0, 20.0),
@@ -107,7 +107,13 @@ class ConversionAuditTests(unittest.TestCase):
         result = build_conversion_audit(hours, periods, timezone=TZ).data
 
         self.assertEqual(result["status"], "ok")
+        self.assertEqual(
+            result["method"],
+            "walk_forward_robust_two_component_local_energy_model",
+        )
         self.assertEqual(result["sample_count"], 8)
+        self.assertEqual(result["baseline_sample_count"], 6)
+        self.assertEqual(result["evaluated_count"], 2)
         self.assertGreater(result["last_difference_pln"], 0.0)
         self.assertGreater(result["last_factor_difference_percent"], 0.0)
         self.assertAlmostEqual(
@@ -116,7 +122,9 @@ class ConversionAuditTests(unittest.TestCase):
         self.assertAlmostEqual(
             result["model_dhw_billed_kwh_per_ariston_kwh"], 1.25, delta=0.08
         )
-        self.assertEqual(len(result["history"]), 8)
+        self.assertEqual(len(result["history"]), 2)
+        self.assertAlmostEqual(result["history"][0]["difference_pln"], 0.0, delta=1e-6)
+        self.assertGreater(result["history"][1]["difference_pln"], 0.0)
 
     def test_za_malo_okresow_nie_udaje_wiarygodnego_modelu(self):
         start = datetime(2026, 1, 1, 12, tzinfo=TZ)
