@@ -1,0 +1,26 @@
+name: Wydanie DUON Gaz 0.4.1
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.head_commit.message == 'DUON Gaz 0.4.1'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v4
+
+      - name: Utwórz wydanie v0.4.1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.4.1 \
+            --target "$GITHUB_SHA" \
+            --title "DUON Gaz 0.4.1" \
+            --notes-file RELEASE_NOTES_0.4.1.md

@@ -4,11 +4,11 @@ Niestandardowa integracja dla Home Assistanta do rekonstrukcji i bieżącego śl
 
 ## Aktualna wersja
 
-**0.4.0** — stabilne wydanie rozszerzające historię kanoniczną o rozdział CO/CWU i kanoniczne koszty przygotowane do Home Assistant Energy Dashboard.
+**0.4.1** — stabilne wydanie dodające informacyjny audyt współczynnika konwersji względem lokalnej relacji Ariston + gazomierz.
 
-Szczegółowe informacje o wydaniu: [`RELEASE_NOTES_0.4.0.md`](RELEASE_NOTES_0.4.0.md).
+Szczegółowe informacje o wydaniu: [`RELEASE_NOTES_0.4.1.md`](RELEASE_NOTES_0.4.1.md).
 
-## Co potrafi 0.4.0
+## Co potrafi 0.4.1
 
 - wybiera dowolne dwa sensory Home Assistanta jako źródła CO i CWU,
 - korzysta ze skumulowanych statystyk `sum` z Recorder,
@@ -49,7 +49,23 @@ duon_gaz:canonical_fixed_cost
 - automatycznie pobiera faktury z Microsoft Outlook / Graph,
 - działa fail-closed: nierozpoznana zaszyfrowana faktura blokuje całą nową paczkę bez częściowego zapisu,
 - zapisuje paczkę faktur atomowo i weryfikuje Store po zapisie,
-- nie modyfikuje surowych statystyk źródłowych CO/CWU.
+- nie modyfikuje surowych statystyk źródłowych CO/CWU,
+- udostępnia informacyjny sensor `Audyt współczynnika konwersji`, który porównuje współczynnik DUON z lokalną historyczną relacją Ariston + gazomierz,
+- w audycie używa tylko faktur z dwiema dokładnie dopasowanymi ręcznymi granicami odczytu; pozostałych okresów nie zgaduje,
+- pokazuje podpisane saldo w PLN z perspektywy użytkownika: `+` oznacza korzyść użytkownika, `-` oznacza koszt wyższy niż lokalna referencja.
+
+## Audyt współczynnika konwersji
+
+Sensor audytu jest wyłącznie diagnostyczny. Nie uczestniczy w rozliczeniach, historii kanonicznej, kalibracji CO/CWU ani Energy Dashboard.
+
+Audyt korzysta z dokładnych ręcznych odczytów gazomierza jako granic okresów, istniejącej niezależnej kalibracji CO/CWU oraz relacji `provisional_m3 / physical_m3` z kanonicznych przedziałów przed normalizacją do gazomierza. Stała referencja kWh/m³ jest wyznaczana jako mediana ważona zużyciem.
+
+Stan encji jest skumulowanym odchyleniem kosztu zmiennego w PLN liczonym z perspektywy użytkownika:
+
+- wartość dodatnia — korzystniej dla użytkownika niż lokalna referencja,
+- wartość ujemna — mniej korzystnie dla użytkownika niż lokalna referencja.
+
+To nie jest laboratoryjny pomiar ciepła spalania ani dowód błędnego rozliczenia. Bez niezależnego kalorymetru audyt może wykrywać dryf i odchylenie względem własnej historii, ale nie bezwzględny błąd dostawcy.
 
 ## Wymagania
 
@@ -59,6 +75,8 @@ duon_gaz:canonical_fixed_cost
 - dla importu PDF: wymaganie `pypdf` jest instalowane z `manifest.json`.
 
 Jeżeli `recorder:` korzysta z `include:`, wybrane sensory CO i CWU muszą znajdować się na liście dozwolonych encji.
+
+Jeżeli historia stanu sensora `Audyt współczynnika konwersji` ma być zapisywana przez Recorder przy konfiguracji `include:`, również należy dodać tę encję do listy dozwolonych encji.
 
 Statystyki `duon_gaz:*` są statystykami zewnętrznymi, a nie stanami encji, dlatego nie trzeba dodawać ich do `recorder.include.entities`.
 
@@ -128,7 +146,7 @@ Jeżeli w Energy Dashboard używany jest rozdział CO/CWU, nie należy dodawać 
 
 DUON Gaz korzysta z oficjalnych interfejsów Home Assistant Recorder. Nie zapisuje bezpośrednio do SQL i nie nadpisuje oryginalnych statystyk CO/CWU.
 
-## Stan walidacji 0.4.0
+## Stan walidacji 0.4.1
 
 Na działającej instalacji potwierdzono m.in.:
 
@@ -140,11 +158,14 @@ Na działającej instalacji potwierdzono m.in.:
 - poprawny przyrostowy refresh bieżącego ogona po pełnym rebuildzie,
 - niezmienność istniejącej kalibracji,
 - poprawny guard importu Outlook,
-- brak ujemnego zużycia i nierozliczonych rollbacków.
+- brak ujemnego zużycia i nierozliczonych rollbacków,
+- dokładne domknięcie używanych okresów audytu `m³ faktura = m³ lokalne`,
+- pomijanie faktur bez dwóch dokładnych ręcznych granic,
+- poprawną, odwróconą z perspektywy użytkownika konwencję znaku salda audytu.
 
 ## Dalszy rozwój
 
-Po wydaniu 0.4.0 pozostają osobno m.in.:
+Po wydaniu 0.4.1 pozostają osobno m.in.:
 
 - finalna konfiguracja Energy Dashboard na działającej instalacji,
 - SMS.
