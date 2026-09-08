@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import importlib.util
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import unittest
 
@@ -14,6 +15,7 @@ MODULE = (
 )
 spec = importlib.util.spec_from_file_location("canonical_costs", MODULE)
 canonical_costs = importlib.util.module_from_spec(spec)
+sys.modules["canonical_costs"] = canonical_costs
 assert spec.loader is not None
 spec.loader.exec_module(canonical_costs)
 
