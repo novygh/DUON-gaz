@@ -133,7 +133,9 @@ def _actual_month_hours(moment: datetime, timezone: tzinfo) -> float:
         next_month = datetime(local.year + 1, 1, 1, tzinfo=timezone)
     else:
         next_month = datetime(local.year, local.month + 1, 1, tzinfo=timezone)
-    return (next_month.astimezone(UTC) - month_start.astimezone(UTC)).total_seconds() / 3600.0
+    return (
+        next_month.astimezone(UTC) - month_start.astimezone(UTC)
+    ).total_seconds() / 3600.0
 
 
 def billing_period_fingerprint(periods: Iterable[dict[str, Any]]) -> str:
@@ -147,8 +149,12 @@ def billing_period_fingerprint(periods: Iterable[dict[str, Any]]) -> str:
         normalized.append(
             {
                 "invoice_number": str(period.get("invoice_number") or ""),
-                "previous_date": previous.get("date") if isinstance(previous, dict) else None,
-                "current_date": current.get("date") if isinstance(current, dict) else None,
+                "previous_date": (
+                    previous.get("date") if isinstance(previous, dict) else None
+                ),
+                "current_date": (
+                    current.get("date") if isinstance(current, dict) else None
+                ),
                 "billed_energy_kwh": period.get("billed_energy_kwh"),
                 "gas_rate_net_pln_kwh": period.get("gas_rate_net_pln_kwh"),
                 "distribution_variable_net_pln_kwh": period.get(
@@ -158,8 +164,15 @@ def billing_period_fingerprint(periods: Iterable[dict[str, Any]]) -> str:
                 "gross_total_pln": period.get("gross_total_pln"),
             }
         )
-    normalized.sort(key=lambda item: (str(item["current_date"]), item["invoice_number"]))
-    payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    normalized.sort(
+        key=lambda item: (str(item["current_date"]), item["invoice_number"])
+    )
+    payload = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -182,9 +195,13 @@ def build_canonical_costs(
 
     for index, row in enumerate(rows):
         if row.start.tzinfo is None or row.start.utcoffset() is None:
-            raise CanonicalCostError("Godzina kanoniczna kosztów nie ma strefy czasowej.")
+            raise CanonicalCostError(
+                "Godzina kanoniczna kosztów nie ma strefy czasowej."
+            )
         if index and row.start != rows[index - 1].start + _ONE_HOUR:
-            raise CanonicalCostError("Historia kanoniczna kosztów nie jest ciągła godzinowo.")
+            raise CanonicalCostError(
+                "Historia kanoniczna kosztów nie jest ciągła godzinowo."
+            )
 
     history_start = rows[0].start
     history_end = rows[-1].start + _ONE_HOUR
@@ -216,18 +233,31 @@ def build_canonical_costs(
             skipped_partial += 1
             continue
         if prior_applied_end is not None and start < prior_applied_end:
-            raise CanonicalCostError("Okresy faktur nakładają się i podwoiłyby koszty.")
+            raise CanonicalCostError(
+                "Okresy faktur nakładają się i podwoiłyby koszty."
+            )
 
         indices = [
             index
             for index, row in enumerate(rows)
             if start <= row.start < end
         ]
-        expected_hours = int(round((end - start).total_seconds() / 3600.0))
+        expected_hours = int(
+            round(
+                (
+                    end.astimezone(UTC) - start.astimezone(UTC)
+                ).total_seconds()
+                / 3600.0
+            )
+        )
         if len(indices) != expected_hours:
-            raise CanonicalCostError("Okres faktury nie ma pełnego pokrycia godzinowego.")
+            raise CanonicalCostError(
+                "Okres faktury nie ma pełnego pokrycia godzinowego."
+            )
         if any(invoiced[index] for index in indices):
-            raise CanonicalCostError("Jedna godzina kosztów należy do więcej niż jednej faktury.")
+            raise CanonicalCostError(
+                "Jedna godzina kosztów należy do więcej niż jednej faktury."
+            )
 
         variable_gross, fixed_gross = _invoice_variable_and_fixed_gross(period)
         gross_total = _as_float(period.get("gross_total_pln"), "gross_total_pln")
@@ -244,7 +274,9 @@ def build_canonical_costs(
         allocated_variable = 0.0
         for index in indices:
             if component_total > _EPSILON:
-                co_share = max(0.0, float(rows[index].heating_m3)) / component_total
+                co_share = (
+                    max(0.0, float(rows[index].heating_m3)) / component_total
+                )
                 dhw_share = max(0.0, float(rows[index].dhw_m3)) / component_total
                 heating[index] += variable_gross * co_share
                 dhw[index] += variable_gross * dhw_share
@@ -273,7 +305,9 @@ def build_canonical_costs(
                 for index in indices
             )
         if abs(invoice_published - gross_total) > 1e-6:
-            raise CanonicalCostError("Koszt godzinowy nie domyka się do brutto faktury.")
+            raise CanonicalCostError(
+                "Koszt godzinowy nie domyka się do brutto faktury."
+            )
 
         applied += 1
         invoiced_gross += gross_total
@@ -296,7 +330,9 @@ def build_canonical_costs(
         (vat, "vat_rate"),
     ):
         if not math.isfinite(value) or value < 0:
-            raise CanonicalCostError(f"Nieprawidłowa bieżąca stawka kosztowa: {field}.")
+            raise CanonicalCostError(
+                f"Nieprawidłowa bieżąca stawka kosztowa: {field}."
+            )
 
     provisional_start = latest_applied_end or history_end
     variable_gross_per_m3 = conversion * (gas_rate + dist_var) * (1.0 + vat)
