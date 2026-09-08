@@ -331,18 +331,28 @@ class DuonGazConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> "DuonGazOptionsFlow":
-        """Zwróć formularz edycji źródeł i parametrów rozliczeniowych."""
+        """Zwróć menu ustawień i ręcznego ponownego połączenia Outlook."""
         del config_entry
         return DuonGazOptionsFlow()
 
 
 class DuonGazOptionsFlow(config_entries.OptionsFlow):
-    """Edycja źródeł i parametrów rozliczeniowych istniejącego wpisu."""
+    """Ustawienia istniejącego wpisu i ręczne uruchomienie reauth Outlook."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Zmień konfigurację rozliczeniową i zachowaj dane Outlook."""
+        """Pokaż menu ustawień DUON Gaz."""
+        del user_input
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["settings", "reconnect_outlook"],
+        )
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Zmień źródła i parametry rozliczeniowe, zachowując dane Outlook."""
         errors: dict[str, str] = {}
         current = dict(self.config_entry.data)
         schema = _configuration_schema()
@@ -364,7 +374,21 @@ class DuonGazOptionsFlow(config_entries.OptionsFlow):
 
         schema = self.add_suggested_values_to_schema(schema, current)
         return self.async_show_form(
-            step_id="init",
+            step_id="settings",
             data_schema=schema,
             errors=errors,
         )
+
+    async def async_step_reconnect_outlook(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Uruchom natywny flow ponownego uwierzytelnienia Microsoft."""
+        del user_input
+        client_id = str(
+            self.config_entry.data.get(CONF_MICROSOFT_CLIENT_ID) or ""
+        ).strip()
+        if not client_id:
+            return self.async_abort(reason="missing_client_id")
+
+        self.config_entry.async_start_reauth(self.hass)
+        return self.async_abort(reason="reauth_started")

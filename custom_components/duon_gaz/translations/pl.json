@@ -60,13 +60,27 @@
     "abort": {
       "single_instance_allowed": "DUON Gaz jest już skonfigurowany.",
       "missing_client_id": "Brak identyfikatora aplikacji Microsoft. Użyj opcji Przekonfiguruj.",
-      "auth_session_missing": "Sesja logowania Microsoft wygasła. Uruchom konfigurację ponownie."
+      "auth_session_missing": "Sesja logowania Microsoft wygasła. Uruchom konfigurację ponownie.",
+      "reauth_successful": "Outlook został ponownie połączony z DUON Gaz.",
+      "reconfigure_successful": "Konfiguracja Outlook w DUON Gaz została zaktualizowana."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Konfiguracja DUON Gaz",
+        "description": "Wybierz, co chcesz zmienić.",
+        "menu_options": {
+          "settings": "Źródła i parametry rozliczeniowe",
+          "reconnect_outlook": "Połącz ponownie Outlook"
+        },
+        "menu_option_descriptions": {
+          "settings": "Zmień sensory CO/CWU oraz parametry rozliczeniowe bez naruszania połączenia Outlook.",
+          "reconnect_outlook": "Uruchom natywne ponowne uwierzytelnienie Microsoft Device Code Flow."
+        }
+      },
+      "settings": {
+        "title": "Źródła i parametry DUON Gaz",
         "description": "Zmień sensory źródłowe lub parametry rozliczeniowe. Dane połączenia Outlook pozostaną zachowane.",
         "data": {
           "heating_entity": "Źródło CO [kWh]",
@@ -82,6 +96,10 @@
     },
     "error": {
       "same_entity": "Wybierz dwa różne sensory źródłowe."
+    },
+    "abort": {
+      "missing_client_id": "Outlook nie jest jeszcze skonfigurowany. Użyj opcji Przekonfiguruj, aby połączyć go po raz pierwszy.",
+      "reauth_started": "Rozpoczęto ponowne połączenie Outlook. Home Assistant utworzył natywny proces ponownego uwierzytelnienia dla DUON Gaz. Otwórz komunikat naprawczy integracji i dokończ logowanie kodem Microsoft."
     }
   }
 }

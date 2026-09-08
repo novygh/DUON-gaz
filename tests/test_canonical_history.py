@@ -45,6 +45,36 @@ class CanonicalHistoryTests(unittest.TestCase):
         self.assertAlmostEqual(result.hours[-1].cumulative_m3, 106.0)
         self.assertAlmostEqual(result.intervals[0].scale_factor or 0.0, 2.0)
 
+    def test_heating_and_dhw_sum_exactly_to_canonical_gas(self) -> None:
+        points = [
+            SourcePoint(datetime(2026, 1, 1, 0, tzinfo=UTC), 0.0, 0.0),
+            SourcePoint(datetime(2026, 1, 1, 1, tzinfo=UTC), 2.0, 1.0),
+            SourcePoint(datetime(2026, 1, 1, 2, tzinfo=UTC), 3.0, 3.0),
+            SourcePoint(datetime(2026, 1, 1, 3, tzinfo=UTC), 6.0, 4.0),
+        ]
+        anchors = [
+            PhysicalAnchor(datetime(2026, 1, 1, 0, tzinfo=UTC), 100.0),
+            PhysicalAnchor(datetime(2026, 1, 1, 3, tzinfo=UTC), 112.0),
+        ]
+        result = build_canonical_history(
+            points,
+            anchors,
+            heating_m3_per_kwh=1.0,
+            dhw_m3_per_kwh=1.0,
+            timezone=UTC,
+        )
+
+        for row in result.hours:
+            self.assertAlmostEqual(row.unattributed_m3, 0.0)
+            self.assertAlmostEqual(row.heating_m3 + row.dhw_m3, row.gas_m3)
+
+        heating = sum(row.heating_m3 for row in result.hours)
+        dhw = sum(row.dhw_m3 for row in result.hours)
+        total = sum(row.gas_m3 for row in result.hours)
+        self.assertAlmostEqual(heating + dhw, total)
+        self.assertAlmostEqual(total, 12.0)
+        self.assertAlmostEqual(result.hours[-1].cumulative_m3, 112.0)
+
     def test_rollback_retracts_prior_overcount_instead_of_negative_usage(self) -> None:
         points = [
             SourcePoint(datetime(2026, 1, 1, 0, tzinfo=UTC), 0.0, 0.0),
