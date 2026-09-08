@@ -1,9 +1,9 @@
 {
   "title": "DUON Gaz",
-  "application_credentials": {
-    "description": "Utwórz własną aplikację Microsoft Entra do odczytu faktur z Outlooka:\n\n1. Otwórz [Rejestracje aplikacji]({app_registration_url}) i utwórz nową aplikację.\n2. Zezwól na konta Microsoft używane przez Twoją skrzynkę.\n3. Dodaj typ platformy **Web** i URI przekierowania `{redirect_url}`.\n4. W Microsoft Graph dodaj delegowane uprawnienie **Mail.Read**. Szczegóły: [Mail.Read]({graph_permissions_url}).\n5. Utwórz sekret klienta.\n6. W Home Assistant wpisz identyfikator klienta i sekret jako poświadczenia aplikacji DUON Gaz.\n\nIntegracja żąda wyłącznie odczytu poczty; nie przenosi ani nie usuwa wiadomości."
-  },
   "config": {
+    "progress": {
+      "wait_for_microsoft": "Otwórz stronę Microsoft:\n\n{url}\n\ni wpisz kod:\n\n```{code}```\n\nZaloguj się do konta Outlook z fakturami DUON i zaakceptuj dostęp **Mail.Read**. Home Assistant automatycznie zakończy konfigurację po zatwierdzeniu."
+    },
     "step": {
       "user": {
         "title": "Konfiguracja DUON Gaz",
@@ -21,8 +21,9 @@
       },
       "reconfigure": {
         "title": "Połącz Outlook z DUON Gaz",
-        "description": "Te dane podajesz jednorazowo. Po zapisaniu nastąpi logowanie do konta Microsoft. DUON Gaz będzie codziennie sprawdzał wskazany folder i automatycznie odszyfrowywał nowe faktury zapisanym hasłem.",
+        "description": "DUON Gaz używa Microsoft Device Code Flow jako klient publiczny — bez sekretu aplikacji i bez okresowej wymiany sekretu. W Microsoft Entra aplikacja musi mieć delegowane **Mail.Read** oraz włączone publiczne przepływy klienta. Po zapisaniu pojawi się kod jednorazowego logowania.",
         "data": {
+          "microsoft_client_id": "Identyfikator aplikacji (Client ID) Microsoft",
           "outlook_folder": "Folder Outlook lub pełna ścieżka folderu",
           "outlook_sender": "Adres nadawcy faktur",
           "outlook_subject": "Temat wiadomości",
@@ -30,6 +31,7 @@
           "outlook_check_hour": "Godzina codziennego sprawdzania (0–23)"
         },
         "data_description": {
+          "microsoft_client_id": "Identyfikator aplikacji z Microsoft Entra. To identyfikator publiczny, nie sekret klienta.",
           "outlook_folder": "Nazwa albo ścieżka folderu, np. Dom/Faktury.",
           "outlook_sender": "Wiadomości od innych nadawców są ignorowane.",
           "outlook_subject": "Temat musi pasować dokładnie, bez rozróżniania wielkości liter.",
@@ -37,18 +39,13 @@
           "outlook_check_hour": "Czas lokalny Home Assistanta."
         }
       },
-      "auth": {
-        "title": "Zaloguj się do Microsoft Outlook"
-      },
-      "pick_implementation": {
-        "title": "Wybierz poświadczenia aplikacji Microsoft",
-        "data": {
-          "implementation": "Poświadczenia aplikacji"
-        }
-      },
       "reauth_confirm": {
         "title": "Ponownie połącz Outlook",
-        "description": "Token Microsoft wygasł lub został unieważniony. Kontynuuj, aby ponownie zalogować konto Outlook używane przez DUON Gaz."
+        "description": "Microsoft wymaga ponownego zalogowania. Kontynuuj, aby otrzymać nowy kod urządzenia. Nie jest potrzebny żaden sekret klienta."
+      },
+      "outlook_auth_error": {
+        "title": "Nie udało się połączyć z Microsoft",
+        "description": "Błąd logowania: `{error}`\n\nSprawdź ustawienia aplikacji Microsoft Entra. Powinna mieć delegowane **Mail.Read** i włączone publiczne przepływy klienta. Kliknij Wyślij, aby spróbować ponownie."
       }
     },
     "error": {
@@ -56,7 +53,9 @@
       "required": "Pole jest wymagane."
     },
     "abort": {
-      "single_instance_allowed": "DUON Gaz jest już skonfigurowany."
+      "single_instance_allowed": "DUON Gaz jest już skonfigurowany.",
+      "missing_client_id": "Brak identyfikatora aplikacji Microsoft. Użyj opcji Przekonfiguruj.",
+      "auth_session_missing": "Sesja logowania Microsoft wygasła. Uruchom konfigurację ponownie."
     }
   },
   "options": {
