@@ -13,6 +13,7 @@ from .canonical_history import (
     SourcePoint,
     build_canonical_history,
 )
+from .canonical_series import merge_canonical_hours
 from .canonical_tail import build_provisional_tail
 from .recorder_stats import async_get_hourly_recorder_series
 
@@ -146,6 +147,7 @@ async def async_build_canonical_history(
         dhw_m3_per_kwh=dhw_coeff,
         timezone=dt_util.DEFAULT_TIME_ZONE,
     )
+    combined = merge_canonical_hours(result.hours, tail.hours)
 
     scales = [
         interval.scale_factor
@@ -216,6 +218,21 @@ async def async_build_canonical_history(
         ),
         "provisional_unresolved_rollback_kwh": round(
             tail.unresolved_rollback_kwh, 6
+        ),
+        "combined_hour_count": len(combined.hours),
+        "combined_overlap_hour_count": combined.overlap_hour_count,
+        "combined_start": (
+            combined.hours[0].start.isoformat() if combined.hours else None
+        ),
+        "combined_end": (
+            (combined.hours[-1].start + timedelta(hours=1)).isoformat()
+            if combined.hours
+            else None
+        ),
+        "combined_meter_m3": (
+            round(combined.hours[-1].cumulative_m3, 6)
+            if combined.hours
+            else None
         ),
     }
     return result, summary
