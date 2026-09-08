@@ -28,7 +28,11 @@ def _processed_invoice_numbers(items: Any) -> set[str]:
     return result
 
 
-def _billing_period(invoice: DuonInvoice, source_message_id: str | None) -> dict[str, Any]:
+def _billing_period(
+    invoice: DuonInvoice,
+    source_message_id: str | None,
+    source_attachment_name: str | None,
+) -> dict[str, Any]:
     """Zbuduj audytowalny rekord rozliczeniowy niezależny od kotwic gazomierza."""
     data = invoice.as_dict()
     data.update(
@@ -42,6 +46,7 @@ def _billing_period(invoice: DuonInvoice, source_message_id: str | None) -> dict
                 else "billing_only_reading"
             ),
             "source_message_id": source_message_id,
+            "source_attachment_name": source_attachment_name,
             "imported_at": dt_util.utcnow().isoformat(),
         }
     )
@@ -67,6 +72,7 @@ async def async_import_invoice(
     invoice: DuonInvoice,
     *,
     source_message_id: str | None = None,
+    source_attachment_name: str | None = None,
 ) -> dict[str, Any]:
     """Zapisz jedną fakturę i opcjonalnie utwórz kotwicę gazomierza.
 
@@ -97,12 +103,13 @@ async def async_import_invoice(
         )
 
     runtime.data.setdefault("billing_periods", []).append(
-        _billing_period(invoice, source_message_id)
+        _billing_period(invoice, source_message_id, source_attachment_name)
     )
     processed.append(
         {
             "invoice_number": invoice.invoice_number,
             "source_message_id": source_message_id,
+            "source_attachment_name": source_attachment_name,
             "imported_at": dt_util.utcnow().isoformat(),
             "reading_type": invoice.current_reading.reading_type,
             "reading_classification": (
