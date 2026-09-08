@@ -1,44 +1,93 @@
-# DUON Gaz v0.1.0 — równoległy test
+# DUON Gaz
 
-Wersja 0.1 nie zastępuje obecnych helperów. Ma działać równolegle.
+Niestandardowa integracja dla Home Assistanta do rekonstrukcji i bieżącego śledzenia zużycia gazu na podstawie fizyczznych odczytów gazomierza oraz skumulowanych statystyk CO/CWU zapisanych w Recorder.
 
-## Co robi
-- wybiera dwa sensory Ariston: CO i CWU (kWh),
-- pozwala wpisać fizyczny stan gazomierza w m³,
-- zapisuje potwierdzone odczyty z timestampem,
-- po dwóch odczytach wylicza korektę Aristona,
-- estymuje bieżący stan gazomierza,
-- estymuje rozdział CO/CWU,
-- estymuje koszt zmienny na ostatnich znanych stawkach,
-- dolicza bieżącą, proporcjonalną część miesięcznych opłat stałych.
+## Aktualny stan projektu
 
-## Czego jeszcze nie robi
-- nie wysyła SMS,
-- nie czyta Gmaila,
-- nie importuje faktur PDF,
-- nie poprawia statystyk historycznych,
-- nie zastępuje obecnego Energy Dashboard.
+Aktualna wersja rozwojowa: **0.3.1**.
 
-## Instalacja
-Skopiuj katalog `custom_components/duon_gaz` do `/config/custom_components/duon_gaz`
-i uruchom ponownie Home Assistant.
+Prace nad linią 0.3.x są prowadzone na gałęzi:
+
+```text
+feature/store-v2-recorder-sums
+```
+
+oraz w roboczym PR #1.
+
+Gałąź `main` nadal zawiera starszą wersję kodu do czasu zakończenia testów i scalenia bieżących zmian.
+
+## Co potrafi wersja 0.3.1
+
+- wybiera dowolne dwa sensory Home Assistanta jako źródła CO i CWU,
+- korzysta ze skumulowanych statystyk `sum` z Recorder,
+- zapisuje dokładne fizyczne odczyty gazomierza,
+- osobno kalibruje CO i CWU w m³/kWh,
+- rekonstruuje brakujące godziny,
+- obsługuje ujemne korekty/rollbacki źródła bez tworzenia ujemnego zużycia,
+- dokładnie domyka rozliczone okresy do fizycznego gazomierza,
+- buduje bieżący szacowany ogon po ostatnim odczycie,
+- publikuje jedną monotoniczną statystykę Recorder:
+
+```text
+duon_gaz:canonical_gas
+```
+
+- automatycznie odświeża bieżący ogon po wygenerowaniu nowych godzinowych statystyk Recorder,
+- nie modyfikuje surowych statystyk źródłowych CO/CWU.
+
+## Wymagania
+
+- Home Assistant z włączonym Recorder,
+- dwa sensory źródłowe CO/CWU posiadające statystyki `sum`,
+- co najmniej dwa zaufane odczyty gazomierza do pełnej rekonstrukcji i kalibracji.
+
+Jeżeli `recorder:` korzysta z `include:`, wybrane sensory CO i CWU muszą znajdować się na liście dozwolonych encji.
+
+`duon_gaz:canonical_gas` jest statystyką zewnętrzną, a nie stanem encji, dlatego nie trzeba dodawać jej do `recorder.include.entities`.
+
+## Instalacja wersji rozwojowej
+
+Do czasu scalenia 0.3.x używaj katalogu:
+
+```text
+custom_components/duon_gaz
+```
+
+z gałęzi:
+
+```text
+feature/store-v2-recorder-sums
+```
+
+Skopiuj go do:
+
+```text
+/config/custom_components/duon_gaz
+```
+
+i uruchom ponownie Home Assistanta po wymianie plików.
 
 Następnie:
-Ustawienia → Urządzenia i usługi → Dodaj integrację → DUON Gaz
 
-Domyślne parametry w formularzu odpowiadają ostatniej przeanalizowanej fakturze:
-- 11.334 kWh/m³
-- 0.22684 PLN/kWh netto
-- 0.0854 PLN/kWh netto
-- 8.00 PLN/m-c netto abonament
-- 8.39 PLN/m-c netto dystrybucja stała
-- VAT 23%
+**Ustawienia → Urządzenia i usługi → Dodaj integrację → DUON Gaz**
 
-## Pierwszy test
-1. Nie usuwaj żadnych obecnych helperów.
-2. Wpisz aktualny fizyczny stan gazomierza do `number.duon_gaz_stan_gazomierza_do_wyslania`.
-3. Naciśnij `button.duon_gaz_zapisz_odczyt_gazomierza`.
-4. Sprawdź, czy zapisany odczyt i timestamp pojawiły się w atrybutach sensora `Gaz zużycie`.
-5. Na razie NIE dodawaj nowych sensorów do Energy Dashboard.
+## Priorytet źródeł danych
 
-Po drugim rzeczywistym odczycie integracja będzie mogła policzyć pierwszy rzeczywisty współczynnik korekcyjny Aristona.
+1. dokładny ręczny fizyczny odczyt gazomierza,
+2. zaufane wskazanie gazomierza z faktury,
+3. statystyki CO/CWU z Recorder jako profil zużycia,
+4. dane rozliczeniowe z faktur,
+5. bieżące szacunki po najnowszej fizycznej kotwicy.
+
+## Bezpieczeństwo danych
+
+DUON Gaz korzysta z interfejsów Home Assistant Recorder. Nie zapisuje bezpośrednio do SQL i nie nadpisuje oryginalnych statystyk CO/CWU.
+
+## Jeszcze do zrobienia
+
+- automatyczne pobieranie faktur z Outlook/Microsoft Graph,
+- pełna obsługa zaszyfrowanych faktur PDF,
+- przygotowanie/wysyłanie SMS,
+- usunięcie instalacyjnych wartości startowych kalibracji i taryf,
+- finalna migracja konfiguracji Energy Dashboard,
+- scalenie linii 0.3.x do `main` i stabilne wydanie HACS.
