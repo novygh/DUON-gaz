@@ -242,6 +242,10 @@ class DuonStatusSensor(DuonBaseSensor):
 
     @property
     def extra_state_attributes(self):
+        publication = self.runtime.data.get("canonical_publication")
+        publication_verified = bool(
+            isinstance(publication, dict) and publication.get("verified", False)
+        )
         attributes = {
             "blad_snapshotu": self.runtime.snapshot_error,
             "liczba_odczytow": len(self.runtime._readings()),
@@ -253,9 +257,7 @@ class DuonStatusSensor(DuonBaseSensor):
             attributes.update(
                 {
                     "historia_kanoniczna_wygenerowana": preview.get("generated_at"),
-                    "historia_opublikowana_do_recorder": preview.get(
-                        "published_to_recorder", False
-                    ),
+                    "historia_opublikowana_do_recorder": publication_verified,
                     "historia_punkty_zrodlowe": preview.get("source_point_count"),
                     "historia_kotwice_wszystkie": preview.get(
                         "anchor_count_total"
@@ -295,9 +297,38 @@ class DuonStatusSensor(DuonBaseSensor):
                     "historia_skala_min": preview.get("scale_factor_min"),
                     "historia_skala_max": preview.get("scale_factor_max"),
                     "historia_audyt": preview.get("audit_intervals", []),
+                    "historia_ogon_godziny": preview.get("provisional_hour_count"),
+                    "historia_ogon_od": preview.get("provisional_start"),
+                    "historia_ogon_do": preview.get("provisional_end"),
+                    "historia_ogon_m3": preview.get("provisional_m3"),
+                    "historia_ogon_stan_gazomierza_m3": preview.get(
+                        "provisional_meter_m3"
+                    ),
+                    "historia_ogon_luki_godziny": preview.get(
+                        "provisional_reconstructed_gap_hours"
+                    ),
+                    "historia_ogon_rollback_kwh": preview.get(
+                        "provisional_rollback_correction_kwh"
+                    ),
+                    "historia_ogon_rollback_przeniesiony_kwh": preview.get(
+                        "provisional_rollback_retracted_kwh"
+                    ),
+                    "historia_ogon_rollback_nierozliczony_kwh": preview.get(
+                        "provisional_unresolved_rollback_kwh"
+                    ),
+                    "historia_polaczona_godziny": preview.get(
+                        "combined_hour_count"
+                    ),
+                    "historia_polaczona_nakladajace_godziny": preview.get(
+                        "combined_overlap_hour_count"
+                    ),
+                    "historia_polaczona_od": preview.get("combined_start"),
+                    "historia_polaczona_do": preview.get("combined_end"),
+                    "historia_polaczona_stan_gazomierza_m3": preview.get(
+                        "combined_meter_m3"
+                    ),
                 }
             )
-        publication = self.runtime.data.get("canonical_publication")
         if isinstance(publication, dict):
             attributes.update(
                 {
