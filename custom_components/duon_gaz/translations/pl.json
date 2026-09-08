@@ -1,5 +1,8 @@
 {
   "title": "DUON Gaz",
+  "application_credentials": {
+    "description": "Utwórz własną aplikację Microsoft Entra do odczytu faktur z Outlooka:\n\n1. Otwórz [Rejestracje aplikacji]({app_registration_url}) i utwórz nową aplikację.\n2. Zezwól na konta Microsoft używane przez Twoją skrzynkę.\n3. Dodaj typ platformy **Web** i URI przekierowania `{redirect_url}`.\n4. W Microsoft Graph dodaj delegowane uprawnienia **Mail.Read** i **User.Read**. Szczegóły: [Mail.Read]({graph_permissions_url}).\n5. Utwórz sekret klienta.\n6. W Home Assistant wpisz identyfikator klienta i sekret jako poświadczenia aplikacji DUON Gaz.\n\nIntegracja żąda wyłącznie odczytu poczty; nie przenosi ani nie usuwa wiadomości."
+  },
   "config": {
     "step": {
       "user": {
@@ -15,10 +18,42 @@
           "dist_fixed_net": "Dystrybucja stała netto [PLN/miesiąc]",
           "vat": "VAT (np. 0.23)"
         }
+      },
+      "reconfigure": {
+        "title": "Połącz Outlook z DUON Gaz",
+        "description": "Te dane podajesz jednorazowo. Po zapisaniu nastąpi logowanie do konta Microsoft. DUON Gaz będzie codziennie sprawdzał wskazany folder i automatycznie odszyfrowywał nowe faktury zapisanym hasłem.",
+        "data": {
+          "outlook_folder": "Folder Outlook lub pełna ścieżka folderu",
+          "outlook_sender": "Adres nadawcy faktur",
+          "outlook_subject": "Temat wiadomości",
+          "invoice_pdf_password": "Hasło do faktur PDF",
+          "outlook_check_hour": "Godzina codziennego sprawdzania (0–23)"
+        },
+        "data_description": {
+          "outlook_folder": "Nazwa albo ścieżka folderu, np. Dom/Faktury.",
+          "outlook_sender": "Wiadomości od innych nadawców są ignorowane.",
+          "outlook_subject": "Temat musi pasować dokładnie, bez rozróżniania wielkości liter.",
+          "invoice_pdf_password": "Pole jest maskowane. Przy ponownej konfiguracji można zostawić je puste, aby zachować dotychczasowe hasło.",
+          "outlook_check_hour": "Czas lokalny Home Assistanta."
+        }
+      },
+      "auth": {
+        "title": "Zaloguj się do Microsoft Outlook"
+      },
+      "pick_implementation": {
+        "title": "Wybierz poświadczenia aplikacji Microsoft",
+        "data": {
+          "implementation": "Poświadczenia aplikacji"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Ponownie połącz Outlook",
+        "description": "Token Microsoft wygasł lub został unieważniony. Kontynuuj, aby ponownie zalogować konto Outlook używane przez DUON Gaz."
       }
     },
     "error": {
-      "same_entity": "Wybierz dwa różne sensory źródłowe."
+      "same_entity": "Wybierz dwa różne sensory źródłowe.",
+      "required": "Pole jest wymagane."
     },
     "abort": {
       "single_instance_allowed": "DUON Gaz jest już skonfigurowany."
@@ -28,7 +63,7 @@
     "step": {
       "init": {
         "title": "Konfiguracja DUON Gaz",
-        "description": "Zmień sensory źródłowe lub parametry rozliczeniowe. Po zapisaniu integracja zostanie przeładowana.",
+        "description": "Zmień sensory źródłowe lub parametry rozliczeniowe. Dane połączenia Outlook pozostaną zachowane.",
         "data": {
           "heating_entity": "Źródło CO [kWh]",
           "dhw_entity": "Źródło CWU [kWh]",
