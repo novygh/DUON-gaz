@@ -350,6 +350,13 @@ def _publication_record(
     combined = build.combined.hours
     calibration = runtime.data.get("calibration", {})
     active_readings = runtime._readings()
+    heating_total_m3 = sum(max(0.0, float(hour.heating_m3)) for hour in combined)
+    dhw_total_m3 = sum(max(0.0, float(hour.dhw_m3)) for hour in combined)
+    unattributed_total_m3 = sum(
+        max(0.0, float(hour.unattributed_m3)) for hour in combined
+    )
+    canonical_consumption_m3 = sum(max(0.0, float(hour.gas_m3)) for hour in combined)
+    split_total_m3 = heating_total_m3 + dhw_total_m3
     return {
         "status": "publishing",
         "mode": mode,
@@ -359,6 +366,13 @@ def _publication_record(
         "statistic_id": CANONICAL_GAS_STATISTIC_ID,
         "heating_statistic_id": CANONICAL_HEATING_STATISTIC_ID,
         "dhw_statistic_id": CANONICAL_DHW_STATISTIC_ID,
+        "component_statistics_verified": False,
+        "canonical_consumption_m3": round(canonical_consumption_m3, 9),
+        "heating_total_m3": round(heating_total_m3, 9),
+        "dhw_total_m3": round(dhw_total_m3, 9),
+        "unattributed_total_m3": round(unattributed_total_m3, 9),
+        "split_total_m3": round(split_total_m3, 9),
+        "split_closure_error_m3": round(split_total_m3 - canonical_consumption_m3, 9),
         # row_count remains the total canonical series size for compatibility
         # with the existing status sensor. write_row_count is the actual DB write
         # per canonical statistic.
