@@ -85,7 +85,12 @@ class DuonGazStore(Store[dict[str, Any]]):
     """Wersjonowany magazyn danych DUON Gaz."""
 
     def __init__(self, hass) -> None:
-        super().__init__(hass, STORAGE_VERSION, STORAGE_KEY)
+        super().__init__(
+            hass,
+            STORAGE_VERSION,
+            STORAGE_KEY,
+            atomic_writes=True,
+        )
 
     async def _async_migrate_func(
         self,
