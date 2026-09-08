@@ -27,7 +27,10 @@ from .const import DOMAIN
 from .publication_rules import active_anchor_fingerprint, active_anchor_set_changed
 
 CANONICAL_GAS_STATISTIC_ID = f"{DOMAIN}:canonical_gas"
+CANONICAL_HEATING_STATISTIC_ID = f"{DOMAIN}:canonical_heating"
+CANONICAL_DHW_STATISTIC_ID = f"{DOMAIN}:canonical_dhw"
 _PUBLISH_LOCKS: dict[str, asyncio.Lock] = {}
+_EPSILON = 1e-9
 
 
 def _publish_lock(runtime) -> asyncio.Lock:
@@ -73,13 +76,56 @@ def _statistics_from_hours(hours: tuple[CanonicalHour, ...]) -> list[StatisticDa
     return statistics
 
 
-def _metadata() -> StatisticMetaData:
+def _component_statistics_from_hours(
+    hours: tuple[CanonicalHour, ...],
+    attribute: str,
+) -> list[StatisticData]:
+    """Build a cumulative component series from the complete canonical history."""
+    cumulative = 0.0
+    statistics: list[StatisticData] = []
+    for hour in hours:
+        value = float(getattr(hour, attribute))
+        if not math.isfinite(value) or value < -_EPSILON:
+            raise CanonicalHistoryError(
+                "Historia kanoniczna zawiera nieprawidłowy składnik CO/CWU."
+            )
+        state = max(0.0, value)
+        cumulative += state
+        statistics.append(
+            StatisticData(
+                start=hour.start,
+                state=round(state, 9),
+                sum=round(cumulative, 9),
+            )
+        )
+    _validate_monotonic(statistics)
+    return statistics
+
+
+def _select_statistics_for_hours(
+    statistics: list[StatisticData],
+    hours: tuple[CanonicalHour, ...],
+) -> list[StatisticData]:
+    """Select already cumulative statistics matching a refresh-hour slice."""
+    starts = {hour.start for hour in hours}
+    selected = [row for row in statistics if row["start"] in starts]
+    if len(selected) != len(hours):
+        raise CanonicalHistoryError(
+            "Nie udało się dopasować godzin CO/CWU do odświeżanego ogona."
+        )
+    return selected
+
+
+def _metadata(
+    statistic_id: str = CANONICAL_GAS_STATISTIC_ID,
+    name: str = "DUON Gaz — historia kanoniczna",
+) -> StatisticMetaData:
     return StatisticMetaData(
         mean_type=StatisticMeanType.NONE,
         has_sum=True,
-        name="DUON Gaz — historia kanoniczna",
+        name=name,
         source=DOMAIN,
-        statistic_id=CANONICAL_GAS_STATISTIC_ID,
+        statistic_id=statistic_id,
         unit_class=VolumeConverter.UNIT_CLASS,
         unit_of_measurement=UnitOfVolume.CUBIC_METERS,
     )
@@ -129,57 +175,108 @@ def _validate_build(build: CanonicalBuild) -> None:
             "Bieżący ogon zawiera nierozliczony rollback źródła i nie może być opublikowany."
         )
 
+    unattributed = 0.0
+    for hour in build.combined.hours:
+        if abs((hour.heating_m3 + hour.dhw_m3 + hour.unattributed_m3) - hour.gas_m3) > 1e-6:
+            raise CanonicalHistoryError(
+                "Składniki CO/CWU historii kanonicznej nie sumują się do całkowitego gazu."
+            )
+        unattributed += max(0.0, float(hour.unattributed_m3))
+    if unattributed > 1e-6:
+        raise CanonicalHistoryError(
+            "Historia zawiera gaz bez defensywnego przypisania do CO lub CWU; "
+            "rozdzielone statystyki nie mogą zostać opublikowane."
+        )
 
-async def _async_verify_publication(
+
+async def _async_verify_statistic(
     runtime,
+    statistic_id: str,
     expected_last_start: datetime,
     expected_last_sum: float,
 ) -> dict[str, Any]:
-    """Wait for Recorder and verify the newest imported canonical row."""
+    """Verify the newest imported row for one external statistic."""
     recorder = get_instance(runtime.hass)
-    await recorder.async_block_till_done()
-
     result = await recorder.async_add_executor_job(
         get_last_statistics,
         runtime.hass,
         1,
-        CANONICAL_GAS_STATISTIC_ID,
+        statistic_id,
         False,
         {"state", "sum"},
     )
-    rows = result.get(CANONICAL_GAS_STATISTIC_ID, [])
+    rows = result.get(statistic_id, [])
     if not rows:
         raise CanonicalHistoryError(
-            "Recorder nie zwrócił opublikowanej historii kanonicznej."
+            f"Recorder nie zwrócił opublikowanej statystyki {statistic_id}."
         )
 
     row = rows[-1]
     last_sum = row.get("sum")
     if last_sum is None or not math.isfinite(float(last_sum)):
         raise CanonicalHistoryError(
-            "Recorder zwrócił nieprawidłową końcową sumę historii kanonicznej."
+            f"Recorder zwrócił nieprawidłową końcową sumę statystyki {statistic_id}."
         )
     if abs(float(last_sum) - expected_last_sum) > 1e-6:
         raise CanonicalHistoryError(
-            "Końcowa suma historii w Recorder nie zgadza się z historią kanoniczną: "
-            f"{last_sum} != {expected_last_sum}."
+            f"Końcowa suma {statistic_id} w Recorder nie zgadza się z historią "
+            f"kanoniczną: {last_sum} != {expected_last_sum}."
         )
 
     last_start_ts = _as_timestamp(row.get("start"))
     if last_start_ts is None:
         raise CanonicalHistoryError(
-            "Recorder nie zwrócił czasu końcowego rekordu historii kanonicznej."
+            f"Recorder nie zwrócił czasu końcowego rekordu {statistic_id}."
         )
     if abs(last_start_ts - expected_last_start.timestamp()) > 1.0:
         raise CanonicalHistoryError(
-            "Końcowy czas historii w Recorder nie zgadza się z historią kanoniczną."
+            f"Końcowy czas {statistic_id} w Recorder nie zgadza się z historią kanoniczną."
         )
 
     return {
-        "verified_at": dt_util.utcnow().isoformat(),
         "last_start": row.get("start"),
         "last_state_m3": row.get("state"),
         "last_sum_m3": float(last_sum),
+    }
+
+
+async def _async_verify_publication(
+    runtime,
+    gas_statistics: list[StatisticData],
+    heating_statistics: list[StatisticData],
+    dhw_statistics: list[StatisticData],
+) -> dict[str, Any]:
+    """Wait for Recorder and verify total gas, heating and DHW statistics."""
+    recorder = get_instance(runtime.hass)
+    await recorder.async_block_till_done()
+
+    gas = await _async_verify_statistic(
+        runtime,
+        CANONICAL_GAS_STATISTIC_ID,
+        gas_statistics[-1]["start"],
+        float(gas_statistics[-1]["sum"]),
+    )
+    heating = await _async_verify_statistic(
+        runtime,
+        CANONICAL_HEATING_STATISTIC_ID,
+        heating_statistics[-1]["start"],
+        float(heating_statistics[-1]["sum"]),
+    )
+    dhw = await _async_verify_statistic(
+        runtime,
+        CANONICAL_DHW_STATISTIC_ID,
+        dhw_statistics[-1]["start"],
+        float(dhw_statistics[-1]["sum"]),
+    )
+
+    return {
+        "verified_at": dt_util.utcnow().isoformat(),
+        "last_start": gas["last_start"],
+        "last_state_m3": gas["last_state_m3"],
+        "last_sum_m3": gas["last_sum_m3"],
+        "heating_last_sum_m3": heating["last_sum_m3"],
+        "dhw_last_sum_m3": dhw["last_sum_m3"],
+        "component_statistics_verified": True,
     }
 
 
@@ -189,6 +286,13 @@ def _publication_requires_full_rebuild(
     build: CanonicalBuild,
 ) -> str | None:
     """Return why an incremental tail refresh is unsafe, if anything."""
+    if (
+        publication.get("heating_statistic_id") != CANONICAL_HEATING_STATISTIC_ID
+        or publication.get("dhw_statistic_id") != CANONICAL_DHW_STATISTIC_ID
+        or not publication.get("component_statistics_verified", False)
+    ):
+        return "component_statistics_missing"
+
     active_readings = runtime._readings()
     if active_anchor_set_changed(
         publication.get("active_anchor_fingerprint"),
@@ -253,8 +357,11 @@ def _publication_record(
         "requested_at": dt_util.utcnow().isoformat(),
         "verified": False,
         "statistic_id": CANONICAL_GAS_STATISTIC_ID,
+        "heating_statistic_id": CANONICAL_HEATING_STATISTIC_ID,
+        "dhw_statistic_id": CANONICAL_DHW_STATISTIC_ID,
         # row_count remains the total canonical series size for compatibility
-        # with the existing status sensor. write_row_count is the actual DB write.
+        # with the existing status sensor. write_row_count is the actual DB write
+        # per canonical statistic.
         "row_count": len(combined),
         "write_row_count": write_row_count,
         "settled_row_count": len(build.settled.hours),
@@ -295,6 +402,9 @@ async def _async_store_verified_publication(
     summary["publication_requested_at"] = publication["requested_at"]
     summary["publication_verified_at"] = verification["verified_at"]
     summary["publication_statistic_id"] = CANONICAL_GAS_STATISTIC_ID
+    summary["publication_heating_statistic_id"] = CANONICAL_HEATING_STATISTIC_ID
+    summary["publication_dhw_statistic_id"] = CANONICAL_DHW_STATISTIC_ID
+    summary["publication_component_statistics_verified"] = True
     summary["publication_row_count"] = publication["row_count"]
     summary["publication_write_row_count"] = publication["write_row_count"]
     summary["publication_mode"] = publication["mode"]
@@ -307,6 +417,38 @@ async def _async_store_verified_publication(
     return publication
 
 
+def _all_component_statistics(build: CanonicalBuild) -> tuple[list[StatisticData], list[StatisticData]]:
+    hours = build.combined.hours
+    return (
+        _component_statistics_from_hours(hours, "heating_m3"),
+        _component_statistics_from_hours(hours, "dhw_m3"),
+    )
+
+
+def _publish_statistics(
+    runtime,
+    gas_statistics: list[StatisticData],
+    heating_statistics: list[StatisticData],
+    dhw_statistics: list[StatisticData],
+) -> None:
+    """Queue all three canonical statistics from one coherent build."""
+    async_add_external_statistics(
+        runtime.hass,
+        _metadata(),
+        gas_statistics,
+    )
+    async_add_external_statistics(
+        runtime.hass,
+        _metadata(CANONICAL_HEATING_STATISTIC_ID, "DUON Gaz — Ogrzewanie"),
+        heating_statistics,
+    )
+    async_add_external_statistics(
+        runtime.hass,
+        _metadata(CANONICAL_DHW_STATISTIC_ID, "DUON Gaz — Ciepła woda"),
+        dhw_statistics,
+    )
+
+
 async def _async_publish_full_locked(
     runtime,
     build: CanonicalBuild,
@@ -316,20 +458,27 @@ async def _async_publish_full_locked(
     """Publish the complete settled + provisional canonical series."""
     _validate_build(build)
     hours = build.combined.hours
-    statistics = _statistics_from_hours(hours)
+    gas_statistics = _statistics_from_hours(hours)
+    heating_statistics, dhw_statistics = _all_component_statistics(build)
     publication = _publication_record(
         runtime,
         build,
         mode="settled_plus_provisional",
-        write_row_count=len(statistics),
+        write_row_count=len(gas_statistics),
         reason=reason,
     )
 
-    async_add_external_statistics(runtime.hass, _metadata(), statistics)
+    _publish_statistics(
+        runtime,
+        gas_statistics,
+        heating_statistics,
+        dhw_statistics,
+    )
     verification = await _async_verify_publication(
         runtime,
-        statistics[-1]["start"],
-        float(statistics[-1]["sum"]),
+        gas_statistics,
+        heating_statistics,
+        dhw_statistics,
     )
     return await _async_store_verified_publication(
         runtime, build, publication, verification
@@ -355,8 +504,9 @@ async def async_refresh_canonical_tail_statistics(
     """Refresh only the open provisional Recorder slice when safe.
 
     The already settled history is left untouched. If a new physical anchor,
-    source entity, or calibration change means historical rows can legitimately
-    change, this function automatically falls back to one full publication.
+    source entity, calibration change or canonical component publication means
+    historical rows can legitimately change, this function automatically falls
+    back to one full publication.
     """
     async with _publish_lock(runtime):
         previous_publication = runtime.data.get("canonical_publication")
@@ -394,20 +544,35 @@ async def async_refresh_canonical_tail_statistics(
                 "reason": "no_provisional_tail",
             }
 
-        statistics = _statistics_from_hours(refresh_hours)
+        gas_statistics = _statistics_from_hours(refresh_hours)
+        all_heating_statistics, all_dhw_statistics = _all_component_statistics(build)
+        heating_statistics = _select_statistics_for_hours(
+            all_heating_statistics,
+            refresh_hours,
+        )
+        dhw_statistics = _select_statistics_for_hours(
+            all_dhw_statistics,
+            refresh_hours,
+        )
         publication = _publication_record(
             runtime,
             build,
             mode="provisional_tail_refresh",
-            write_row_count=len(statistics),
+            write_row_count=len(gas_statistics),
             reason=reason,
         )
 
-        async_add_external_statistics(runtime.hass, _metadata(), statistics)
+        _publish_statistics(
+            runtime,
+            gas_statistics,
+            heating_statistics,
+            dhw_statistics,
+        )
         verification = await _async_verify_publication(
             runtime,
-            statistics[-1]["start"],
-            float(statistics[-1]["sum"]),
+            gas_statistics,
+            heating_statistics,
+            dhw_statistics,
         )
         return await _async_store_verified_publication(
             runtime, build, publication, verification
