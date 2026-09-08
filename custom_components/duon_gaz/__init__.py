@@ -8,14 +8,10 @@ from typing import TypeAlias
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_TOKEN, EVENT_RECORDER_HOURLY_STATISTICS_GENERATED
+from homeassistant.const import EVENT_RECORDER_HOURLY_STATISTICS_GENERATED
 from homeassistant.core import Event, HomeAssistant, ServiceCall
-from homeassistant.exceptions import (
-    HomeAssistantError,
-    OAuth2TokenRequestError,
-    OAuth2TokenRequestReauthError,
-)
-from homeassistant.helpers import config_entry_oauth2_flow, config_validation as cv
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_call_later, async_track_time_change
 
 from .canonical_history import CanonicalHistoryError
@@ -25,6 +21,8 @@ from .canonical_statistics import (
 )
 from .const import (
     CONF_INVOICE_PDF_PASSWORD,
+    CONF_MICROSOFT_CLIENT_ID,
+    CONF_MICROSOFT_TOKEN,
     CONF_OUTLOOK_CHECK_HOUR,
     CONF_OUTLOOK_FOLDER,
     CONF_OUTLOOK_SENDER,
@@ -37,6 +35,11 @@ from .graph import DuonGraphAuthError, DuonGraphClient, DuonGraphError
 from .history_import import async_import_history_file
 from .invoice_import import async_import_invoice
 from .invoice_parser import DuonInvoiceParseError, parse_invoice_pdf
+from .microsoft_auth import (
+    DuonMicrosoftAuthError,
+    DuonMicrosoftReauthRequired,
+    MicrosoftTokenSession,
+)
 from .outlook_sync import DuonOutlookSynchronizer
 from .runtime import DuonGazRuntime
 
@@ -80,9 +83,11 @@ def _config_file_path(hass: HomeAssistant, value: str) -> Path:
 
 def _outlook_is_configured(entry: ConfigEntry) -> bool:
     """Sprawdź, czy wpis zawiera komplet danych potrzebnych do automatyzacji."""
+    token = entry.data.get(CONF_MICROSOFT_TOKEN)
+    has_refresh_token = isinstance(token, dict) and bool(token.get("refresh_token"))
     return bool(
-        entry.data.get("auth_implementation")
-        and entry.data.get(CONF_TOKEN)
+        entry.data.get(CONF_MICROSOFT_CLIENT_ID)
+        and has_refresh_token
         and entry.data.get(CONF_OUTLOOK_FOLDER)
         and entry.data.get(CONF_OUTLOOK_SENDER)
         and entry.data.get(CONF_OUTLOOK_SUBJECT)
@@ -99,30 +104,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: DuonGazConfigEntry) -> b
 
     synchronizer: DuonOutlookSynchronizer | None = None
     if _outlook_is_configured(entry):
-        try:
-            implementation = (
-                await config_entry_oauth2_flow.async_get_config_entry_implementation(
-                    hass, entry
-                )
-            )
-        except ValueError as err:
-            # HA 2026.8 zgłasza ValueError, a nowsze wersje używają
-            # UnknownImplementationError dziedziczącego po ValueError.
-            _LOGGER.warning(
-                "Nie można uruchomić automatyzacji Outlook DUON Gaz: %s", err
-            )
-            entry.async_start_reauth(hass)
-        else:
-            oauth_session = config_entry_oauth2_flow.OAuth2Session(
-                hass,
-                entry,
-                implementation,
-            )
-            synchronizer = DuonOutlookSynchronizer(
-                runtime,
-                DuonGraphClient(hass, oauth_session),
-                dict(entry.data),
-            )
+        auth_session = MicrosoftTokenSession(hass, entry)
+        synchronizer = DuonOutlookSynchronizer(
+            runtime,
+            DuonGraphClient(hass, auth_session),
+            dict(entry.data),
+        )
 
     async def _handle_import_history(call: ServiceCall) -> None:
         try:
@@ -209,16 +196,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: DuonGazConfigEntry) -> b
 
         try:
             result = await synchronizer.async_sync(reason=reason)
-        except DuonGraphAuthError as err:
+        except (DuonMicrosoftReauthRequired, DuonGraphAuthError) as err:
             entry.async_start_reauth(hass)
             _LOGGER.warning("Autoryzacja Outlook DUON Gaz wymaga odnowienia: %s", err)
             if raise_service_error:
                 raise HomeAssistantError(str(err)) from err
             return
-        except (DuonGraphError, ValueError, OAuth2TokenRequestError) as err:
+        except (DuonMicrosoftAuthError, DuonGraphError, ValueError) as err:
             _LOGGER.warning("Synchronizacja Outlook DUON Gaz nie powiodła się: %s", err)
-            if isinstance(err, OAuth2TokenRequestReauthError):
-                entry.async_start_reauth(hass)
             if raise_service_error:
                 raise HomeAssistantError(str(err)) from err
             return
