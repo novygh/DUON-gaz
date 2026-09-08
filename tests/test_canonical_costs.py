@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from zoneinfo import ZoneInfo
 
 MODULE = (
     Path(__file__).parents[1]
@@ -91,6 +92,60 @@ class CanonicalCostTests(unittest.TestCase):
         co = sum(row.heating_pln for row in result.hours)
         dhw = sum(row.dhw_pln for row in result.hours)
         self.assertAlmostEqual(co / dhw, 2.0, places=6)
+
+    def test_dst_spring_forward_uses_real_utc_hour_count(self) -> None:
+        warsaw = ZoneInfo("Europe/Warsaw")
+        start_local = datetime(2026, 3, 28, 12, tzinfo=warsaw)
+        end_local = datetime(2026, 3, 30, 12, tzinfo=warsaw)
+        elapsed_hours = int(
+            (
+                end_local.astimezone(UTC) - start_local.astimezone(UTC)
+            ).total_seconds()
+            / 3600
+        )
+        self.assertEqual(elapsed_hours, 47)
+
+        result = build_canonical_costs(
+            _hours(start_local.astimezone(UTC), elapsed_hours),
+            [_invoice("DST-SPRING", "2026-03-28", "2026-03-30")],
+            timezone=warsaw,
+            conversion_factor_kwh_m3=11.0,
+            gas_rate_net_pln_kwh=0.11,
+            distribution_variable_net_pln_kwh=0.03,
+            subscription_net_pln_month=12.0,
+            distribution_fixed_net_pln_month=18.0,
+            vat_rate=0.23,
+        )
+
+        self.assertEqual(result.applied_invoice_count, 1)
+        self.assertAlmostEqual(result.invoiced_closure_error_pln, 0.0, places=6)
+
+    def test_dst_fall_back_uses_real_utc_hour_count(self) -> None:
+        warsaw = ZoneInfo("Europe/Warsaw")
+        start_local = datetime(2026, 10, 24, 12, tzinfo=warsaw)
+        end_local = datetime(2026, 10, 26, 12, tzinfo=warsaw)
+        elapsed_hours = int(
+            (
+                end_local.astimezone(UTC) - start_local.astimezone(UTC)
+            ).total_seconds()
+            / 3600
+        )
+        self.assertEqual(elapsed_hours, 49)
+
+        result = build_canonical_costs(
+            _hours(start_local.astimezone(UTC), elapsed_hours),
+            [_invoice("DST-FALL", "2026-10-24", "2026-10-26")],
+            timezone=warsaw,
+            conversion_factor_kwh_m3=11.0,
+            gas_rate_net_pln_kwh=0.11,
+            distribution_variable_net_pln_kwh=0.03,
+            subscription_net_pln_month=12.0,
+            distribution_fixed_net_pln_month=18.0,
+            vat_rate=0.23,
+        )
+
+        self.assertEqual(result.applied_invoice_count, 1)
+        self.assertAlmostEqual(result.invoiced_closure_error_pln, 0.0, places=6)
 
     def test_overlapping_invoices_fail_closed(self) -> None:
         start = datetime(2026, 1, 1, 12, tzinfo=UTC)
