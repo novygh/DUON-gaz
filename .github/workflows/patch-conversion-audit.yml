@@ -1,0 +1,62 @@
+name: Jednorazowe spięcie audytu konwersji
+
+on:
+  push:
+    branches:
+      - feature/conversion-audit
+    paths:
+      - .github/workflows/patch-conversion-audit.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v4
+        with:
+          ref: feature/conversion-audit
+
+      - name: Dodaj encję audytu do platformy sensor
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("custom_components/duon_gaz/sensor.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_imports = '''from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback\n\nfrom .const import DOMAIN\nfrom .runtime import DuonGazRuntime\n'''
+          new_imports = '''from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback\nfrom homeassistant.util import dt as dt_util\n\nfrom .canonical_builder import async_build_canonical_bundle\nfrom .canonical_costs import billing_period_fingerprint\nfrom .const import DOMAIN\nfrom .conversion_audit import ConversionAuditError, build_conversion_audit\nfrom .publication_rules import active_anchor_fingerprint\nfrom .runtime import DuonGazRuntime\n'''
+          if old_imports not in text:
+              raise SystemExit("Nie znaleziono bloku importów sensor.py")
+          text = text.replace(old_imports, new_imports, 1)
+
+          old_list = '''            DuonConversionSensor(runtime),\n            DuonCalibrationSensor(runtime),\n'''
+          new_list = '''            DuonConversionSensor(runtime),\n            DuonConversionAuditSensor(runtime),\n            DuonCalibrationSensor(runtime),\n'''
+          if old_list not in text:
+              raise SystemExit("Nie znaleziono listy encji sensor.py")
+          text = text.replace(old_list, new_list, 1)
+
+          marker = '''\n\nclass DuonCalibrationSensor(DuonBaseSensor):\n'''
+          if marker not in text:
+              raise SystemExit("Nie znaleziono miejsca dla encji audytu")
+
+          audit_class = r'''\n\nclass DuonConversionAuditSensor(DuonBaseSensor):\n    """Informacyjny bilans faktury względem lokalnego modelu energii Ariston."""\n\n    _attr_name = "Audyt współczynnika konwersji"\n    _attr_unique_id = "duon_gaz_conversion_audit"\n    _attr_icon = "mdi:scale-balance"\n    _attr_device_class = SensorDeviceClass.MONETARY\n    _attr_state_class = SensorStateClass.TOTAL\n    _attr_native_unit_of_measurement = "PLN"\n    _attr_should_poll = False\n\n    def __init__(self, runtime: DuonGazRuntime) -> None:\n        super().__init__(runtime)\n        self._audit: dict | None = None\n        self._audit_fingerprint = None\n        self._audit_unsub = None\n        self._audit_task = None\n\n    def _current_audit_fingerprint(self):\n        return (\n            billing_period_fingerprint(self.runtime.data.get("billing_periods", [])),\n            active_anchor_fingerprint(self.runtime._readings()),\n            self.runtime.heating_entity,\n            self.runtime.dhw_entity,\n            self.runtime.co_m3_per_kwh,\n            self.runtime.dhw_m3_per_kwh,\n        )\n\n    @callback\n    def _schedule_audit_refresh(self) -> None:\n        fingerprint = self._current_audit_fingerprint()\n        if fingerprint == self._audit_fingerprint:\n            return\n        if self._audit_task is not None and not self._audit_task.done():\n            return\n        self._audit_task = self.hass.async_create_task(\n            self._async_refresh_audit(fingerprint)\n        )\n\n    async def _async_refresh_audit(self, fingerprint) -> None:\n        try:\n            build = await async_build_canonical_bundle(self.runtime)\n            result = build_conversion_audit(\n                build.combined.hours,\n                self.runtime.data.get("billing_periods", []),\n                timezone=dt_util.DEFAULT_TIME_ZONE,\n            )\n            self._audit = result.data\n        except (ConversionAuditError, ValueError, RuntimeError) as err:\n            self._audit = {\n                "status": "unavailable",\n                "error": str(err),\n            }\n        self._audit_fingerprint = fingerprint\n        self.async_write_ha_state()\n\n    async def async_added_to_hass(self) -> None:\n        await super().async_added_to_hass()\n\n        @callback\n        def _recalculate(_event: Event) -> None:\n            self._schedule_audit_refresh()\n\n        self._audit_unsub = self.hass.bus.async_listen(\n            f"{self.runtime.entry_id}_duon_gaz_update", _recalculate\n        )\n        self._schedule_audit_refresh()\n\n    async def async_will_remove_from_hass(self) -> None:\n        if self._audit_unsub:\n            self._audit_unsub()\n            self._audit_unsub = None\n        await super().async_will_remove_from_hass()\n\n    @property\n    def available(self) -> bool:\n        return bool(self._audit and self._audit.get("status") == "ok")\n\n    @property\n    def native_value(self):\n        if not self.available:\n            return None\n        return round(float(self._audit["cumulative_difference_pln"]), 2)\n\n    @property\n    def extra_state_attributes(self):\n        if not isinstance(self._audit, dict):\n            return {\n                "informacyjny": True,\n                "status": "oczekiwanie na obliczenie",\n            }\n        if self._audit.get("status") != "ok":\n            return {\n                "informacyjny": True,\n                "status": "niedostępny",\n                "blad": self._audit.get("error"),\n            }\n\n        history = [\n            {\n                "czas": item["end"],\n                "saldo_pln": item["cumulative_pln"],\n                "roznica_pln": item["difference_pln"],\n                "duon_kwh_m3": item["duon_kwh_m3"],\n                "lokalny_model_kwh_m3": item["local_model_kwh_m3"],\n                "lokalny_ariston_kwh_m3": item["raw_ariston_kwh_m3"],\n                "roznica_proc": item["factor_difference_percent"],\n                "luki_godziny": item["reconstructed_gap_hours"],\n            }\n            for item in self._audit.get("history", [])\n        ]\n        return {\n            "informacyjny": True,\n            "uzywany_do_rozliczen": False,\n            "interpretacja": (\n                "Wartość dodatnia oznacza większy koszt zmienny energii na fakturach "\n                "niż przewiduje lokalny model Ariston CO/CWU; wartość ujemna oznacza "\n                "mniejszy koszt. To wskaźnik diagnostyczny, nie laboratoryjny pomiar "\n                "ciepła spalania ani dowód nieprawidłowego rozliczenia."\n            ),\n            "metoda": self._audit.get("method"),\n            "liczba_okresow": self._audit.get("sample_count"),\n            "model_co_mnoznik": self._audit.get(\n                "model_co_billed_kwh_per_ariston_kwh"\n            ),\n            "model_cwu_mnoznik": self._audit.get(\n                "model_dhw_billed_kwh_per_ariston_kwh"\n            ),\n            "model_co_sprawnosc_pozorna_proc": self._audit.get(\n                "model_co_apparent_efficiency_percent"\n            ),\n            "model_cwu_sprawnosc_pozorna_proc": self._audit.get(\n                "model_dhw_apparent_efficiency_percent"\n            ),\n            "model_mae_kwh": self._audit.get("model_mae_kwh"),\n            "ostatni_odczyt_od": self._audit.get("last_start"),\n            "ostatni_odczyt_do": self._audit.get("last_end"),\n            "ostatni_duon_kwh_m3": self._audit.get("last_duon_kwh_m3"),\n            "ostatni_lokalny_model_kwh_m3": self._audit.get(\n                "last_local_model_kwh_m3"\n            ),\n            "ostatni_lokalny_ariston_kwh_m3": self._audit.get(\n                "last_raw_ariston_kwh_m3"\n            ),\n            "ostatnia_sprawnosc_pozorna_proc": self._audit.get(\n                "last_apparent_efficiency_percent"\n            ),\n            "ostatnia_roznica_proc": self._audit.get(\n                "last_factor_difference_percent"\n            ),\n            "ostatnia_roznica_pln": self._audit.get("last_difference_pln"),\n            "saldo_pln": self._audit.get("cumulative_difference_pln"),\n            "pominiete_poza_historia_lub_niepelne": self._audit.get(\n                "skipped_outside_or_incomplete_count"\n            ),\n            "pominiete_nieprawidlowe": self._audit.get("skipped_invalid_count"),\n            "historia": history,\n        }\n'''
+          audit_class = audit_class.replace('\\n', '\n')
+          text = text.replace(marker, audit_class + marker, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Usuń jednorazowy workflow i zapisz zmianę
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/patch-conversion-audit.yml
+          git add custom_components/duon_gaz/sensor.py
+          git commit -m "Dodaj encję audytu współczynnika konwersji"
+          git push origin HEAD:feature/conversion-audit
