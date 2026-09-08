@@ -10,7 +10,12 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_TOKEN, EVENT_RECORDER_HOURLY_STATISTICS_GENERATED
 from homeassistant.core import Event, HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError, UnknownImplementationError
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    OAuth2TokenRequestError,
+    OAuth2TokenRequestReauthError,
+    UnknownImplementationError,
+)
 from homeassistant.helpers import config_entry_oauth2_flow, config_validation as cv
 from homeassistant.helpers.event import async_call_later, async_track_time_change
 
@@ -197,7 +202,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DuonGazConfigEntry) -> b
         if synchronizer is None:
             if raise_service_error:
                 raise HomeAssistantError(
-                    "Outlook nie jest jeszcze połączony z DUON Gaz. Użyj opcji Przeconfigure/Połącz Outlook w integracji."
+                    "Outlook nie jest jeszcze połączony z DUON Gaz. Użyj akcji Przekonfiguruj / Połącz Outlook w integracji."
                 )
             return
 
@@ -209,16 +214,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DuonGazConfigEntry) -> b
             if raise_service_error:
                 raise HomeAssistantError(str(err)) from err
             return
-        except (
-            DuonGraphError,
-            ValueError,
-            config_entry_oauth2_flow.OAuth2TokenRequestError,
-        ) as err:
+        except (DuonGraphError, ValueError, OAuth2TokenRequestError) as err:
             _LOGGER.warning("Synchronizacja Outlook DUON Gaz nie powiodła się: %s", err)
-            if isinstance(
-                err,
-                config_entry_oauth2_flow.OAuth2TokenRequestReauthError,
-            ):
+            if isinstance(err, OAuth2TokenRequestReauthError):
                 entry.async_start_reauth(hass)
             if raise_service_error:
                 raise HomeAssistantError(str(err)) from err
