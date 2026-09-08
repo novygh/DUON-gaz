@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
+from hashlib import sha256
 from io import BytesIO
 from typing import Any
 
@@ -18,6 +20,9 @@ from .const import (
 from .graph import DuonGraphClient, DuonGraphError
 from .invoice_import import async_import_invoice
 from .invoice_parser import DuonInvoiceParseError, parse_invoice_pdf_bytes
+
+# Zwiększamy przy świadomej zmianie reguł rozpoznawania układu faktury.
+_INVOICE_PARSER_VERSION = 1
 
 
 def _processed_message_ids(items: Any) -> set[str]:
@@ -55,8 +60,24 @@ def _pdf_is_encrypted(content: bytes) -> bool:
     return bool(reader.is_encrypted)
 
 
+def _pdf_fingerprint(content: bytes) -> str:
+    """Zwróć krótki odcisk PDF bez ujawniania jego treści."""
+    return sha256(content).hexdigest()[:16]
+
+
+def _message_audit_record(message: dict[str, Any]) -> dict[str, Any]:
+    """Zbuduj bezpieczny rekord zakończonego przetwarzania wiadomości."""
+    return {
+        "message_id": str(message.get("id") or ""),
+        "internet_message_id": message.get("internetMessageId"),
+        "received_at": message.get("receivedDateTime"),
+        "subject": message.get("subject"),
+        "processed_at": dt_util.utcnow().isoformat(),
+    }
+
+
 class DuonOutlookSynchronizer:
-    """Pobieraj i importuj nowe faktury z Outlooka bez zapisu hasła w logach."""
+    """Pobieraj i importuj nowe faktury z Outlooka bez zapisu sekretów w logach."""
 
     def __init__(self, runtime, graph: DuonGraphClient, config: dict[str, Any]) -> None:
         self.runtime = runtime
@@ -68,6 +89,66 @@ class DuonOutlookSynchronizer:
         """Wykonaj jedną pełną iterację synchronizacji Outlook → DUON."""
         async with self._lock:
             return await self._async_sync_locked(reason=reason)
+
+    async def _save_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Zapisz wynik synchronizacji i odśwież encje diagnostyczne."""
+        self.runtime.data["last_outlook_sync"] = result
+        await self.runtime.async_save()
+        self.runtime.async_notify()
+        return result
+
+    async def _block_import(
+        self,
+        *,
+        reason: str,
+        started_at: str,
+        folder_name: str,
+        folder_display: str | None,
+        matched_messages: int,
+        pdf_count: int,
+        ignored_unprotected_pdfs: int,
+        stage: str,
+        error: str,
+        attachment_name: str | None = None,
+        attachment_fingerprint: str | None = None,
+    ) -> dict[str, Any]:
+        """Wstrzymaj całą paczkę zanim jakakolwiek nowa faktura zostanie zapisana."""
+        now = dt_util.utcnow().isoformat()
+        guard = {
+            "status": "blocked",
+            "blocked_at": now,
+            "stage": stage,
+            "attachment": attachment_name,
+            "fingerprint": attachment_fingerprint,
+            "parser_version": _INVOICE_PARSER_VERSION,
+            "error": error,
+        }
+        self.runtime.data["invoice_import_guard"] = guard
+        result = {
+            "status": "blocked",
+            "reason": reason,
+            "started_at": started_at,
+            "finished_at": now,
+            "folder": folder_display or folder_name,
+            "matched_messages": matched_messages,
+            "processed_messages": 0,
+            "pdf_count": pdf_count,
+            "ignored_unprotected_pdfs": ignored_unprotected_pdfs,
+            "imported_invoices": 0,
+            "duplicate_invoices": 0,
+            "anchors_added": 0,
+            "parser_version": _INVOICE_PARSER_VERSION,
+            "guard": guard,
+            "canonical_refresh": None,
+            "errors": [
+                {
+                    "stage": stage,
+                    "attachment": attachment_name,
+                    "error": error,
+                }
+            ],
+        }
+        return await self._save_result(result)
 
     async def _async_sync_locked(self, *, reason: str) -> dict[str, Any]:
         folder_name = str(self.config.get(CONF_OUTLOOK_FOLDER) or "").strip()
@@ -85,13 +166,6 @@ class DuonOutlookSynchronizer:
             raise ValueError("Nie skonfigurowano hasła do faktur PDF DUON.")
 
         started_at = dt_util.utcnow().isoformat()
-        errors: list[dict[str, str]] = []
-        imported = 0
-        duplicates = 0
-        anchors_added = 0
-        messages_marked = 0
-        pdf_count = 0
-        ignored_unprotected_pdfs = 0
 
         try:
             folder = await self.graph.async_find_mail_folder(folder_name)
@@ -115,43 +189,51 @@ class DuonOutlookSynchronizer:
                 "imported_invoices": 0,
                 "duplicate_invoices": 0,
                 "anchors_added": 0,
+                "parser_version": _INVOICE_PARSER_VERSION,
+                "canonical_refresh": None,
                 "errors": [{"stage": "graph", "error": str(err)}],
             }
-            self.runtime.data["last_outlook_sync"] = result
-            await self.runtime.async_save()
-            self.runtime.async_notify()
+            await self._save_result(result)
             raise
 
+        folder_display = str(
+            folder.get("path") or folder.get("displayName") or folder_name
+        )
         processed_items = self.runtime.data.setdefault("processed_messages", [])
         processed_ids = _processed_message_ids(processed_items)
+        pending_messages = [
+            message
+            for message in messages
+            if str(message.get("id") or "")
+            and str(message.get("id") or "") not in processed_ids
+        ]
 
-        for message in messages:
+        # Faza 1: preflight. Pobieramy i parsujemy CAŁĄ nową paczkę bez
+        # zapisywania faktur. Zmiana układu choć jednego zaszyfrowanego PDF-a
+        # blokuje całą paczkę, więc nie ma częściowego importu.
+        staged: list[tuple[dict[str, Any], Any, Any]] = []
+        messages_to_mark: list[dict[str, Any]] = []
+        pdf_count = 0
+        ignored_unprotected_pdfs = 0
+
+        for message in pending_messages:
             message_id = str(message.get("id") or "")
-            if not message_id or message_id in processed_ids:
-                continue
-
-            message_ok = True
             try:
                 attachments = await self.graph.async_get_pdf_attachments(message_id)
             except DuonGraphError as err:
-                errors.append(
-                    {
-                        "stage": "attachments",
-                        "message_id": message_id,
-                        "error": str(err),
-                    }
+                return await self._block_import(
+                    reason=reason,
+                    started_at=started_at,
+                    folder_name=folder_name,
+                    folder_display=folder_display,
+                    matched_messages=len(messages),
+                    pdf_count=pdf_count,
+                    ignored_unprotected_pdfs=ignored_unprotected_pdfs,
+                    stage="attachments",
+                    error=str(err),
                 )
-                continue
 
-            if not attachments:
-                errors.append(
-                    {
-                        "stage": "attachments",
-                        "message_id": message_id,
-                        "error": "Wiadomość nie zawiera załącznika PDF.",
-                    }
-                )
-                continue
+            messages_to_mark.append(message)
 
             for attachment in attachments:
                 pdf_count += 1
@@ -160,54 +242,105 @@ class DuonOutlookSynchronizer:
                         _pdf_is_encrypted,
                         attachment.content,
                     )
-                    if not is_encrypted:
-                        ignored_unprotected_pdfs += 1
-                        continue
+                except (DuonInvoiceParseError, OSError, ValueError) as err:
+                    return await self._block_import(
+                        reason=reason,
+                        started_at=started_at,
+                        folder_name=folder_name,
+                        folder_display=folder_display,
+                        matched_messages=len(messages),
+                        pdf_count=pdf_count,
+                        ignored_unprotected_pdfs=ignored_unprotected_pdfs,
+                        stage="pdf_probe",
+                        error=str(err),
+                        attachment_name=attachment.name,
+                        attachment_fingerprint=_pdf_fingerprint(attachment.content),
+                    )
 
+                if not is_encrypted:
+                    ignored_unprotected_pdfs += 1
+                    continue
+
+                try:
                     invoice = await self.runtime.hass.async_add_executor_job(
                         parse_invoice_pdf_bytes,
                         attachment.content,
                         password,
                     )
-                    result = await async_import_invoice(
-                        self.runtime,
-                        invoice,
-                        source_message_id=message_id,
-                        source_attachment_name=attachment.name,
-                    )
                 except (DuonInvoiceParseError, OSError, ValueError) as err:
-                    message_ok = False
-                    errors.append(
-                        {
-                            "stage": "invoice",
-                            "message_id": message_id,
-                            "attachment": attachment.name,
-                            "error": str(err),
-                        }
+                    return await self._block_import(
+                        reason=reason,
+                        started_at=started_at,
+                        folder_name=folder_name,
+                        folder_display=folder_display,
+                        matched_messages=len(messages),
+                        pdf_count=pdf_count,
+                        ignored_unprotected_pdfs=ignored_unprotected_pdfs,
+                        stage="invoice_preflight",
+                        error=str(err),
+                        attachment_name=attachment.name,
+                        attachment_fingerprint=_pdf_fingerprint(attachment.content),
                     )
-                    continue
 
+                staged.append((message, attachment, invoice))
+
+        # Faza 2: commit. Preflight wszystkich nowych zaszyfrowanych PDF-ów
+        # zakończył się poprawnie. Na dodatkową ochronę zachowujemy pełną kopię
+        # Store i przy błędzie zapisu cofamy całą paczkę.
+        before_commit = deepcopy(self.runtime.data)
+        imported = 0
+        duplicates = 0
+        anchors_added = 0
+
+        try:
+            for message, attachment, invoice in staged:
+                message_id = str(message.get("id") or "")
+                result = await async_import_invoice(
+                    self.runtime,
+                    invoice,
+                    source_message_id=message_id,
+                    source_attachment_name=attachment.name,
+                )
                 if result.get("status") == "duplicate":
                     duplicates += 1
                 elif result.get("status") == "imported":
                     imported += 1
                 if result.get("anchor_added", False):
                     anchors_added += 1
+        except (DuonInvoiceParseError, OSError, ValueError, RuntimeError) as err:
+            self.runtime.data = before_commit
+            await self.runtime.async_save()
+            return await self._block_import(
+                reason=reason,
+                started_at=started_at,
+                folder_name=folder_name,
+                folder_display=folder_display,
+                matched_messages=len(messages),
+                pdf_count=pdf_count,
+                ignored_unprotected_pdfs=ignored_unprotected_pdfs,
+                stage="invoice_commit",
+                error=str(err),
+            )
 
-            if message_ok:
-                processed_items.append(
-                    {
-                        "message_id": message_id,
-                        "internet_message_id": message.get("internetMessageId"),
-                        "received_at": message.get("receivedDateTime"),
-                        "subject": message.get("subject"),
-                        "processed_at": dt_util.utcnow().isoformat(),
-                    }
-                )
+        processed_items = self.runtime.data.setdefault("processed_messages", [])
+        for message in messages_to_mark:
+            message_id = str(message.get("id") or "")
+            if message_id and message_id not in processed_ids:
+                processed_items.append(_message_audit_record(message))
                 processed_ids.add(message_id)
-                messages_marked += 1
+
+        self.runtime.data["invoice_import_guard"] = {
+            "status": "ok",
+            "checked_at": dt_util.utcnow().isoformat(),
+            "parser_version": _INVOICE_PARSER_VERSION,
+            "validated_encrypted_pdfs": len(staged),
+            "ignored_unprotected_pdfs": ignored_unprotected_pdfs,
+        }
+        await self.runtime.async_save()
+        self.runtime.async_notify()
 
         canonical_refresh = None
+        errors: list[dict[str, str]] = []
         if anchors_added:
             try:
                 canonical_refresh = await async_refresh_canonical_tail_statistics(
@@ -223,18 +356,17 @@ class DuonOutlookSynchronizer:
             "reason": reason,
             "started_at": started_at,
             "finished_at": dt_util.utcnow().isoformat(),
-            "folder": folder.get("path") or folder.get("displayName") or folder_name,
+            "folder": folder_display,
             "matched_messages": len(messages),
-            "processed_messages": messages_marked,
+            "processed_messages": len(messages_to_mark),
             "pdf_count": pdf_count,
             "ignored_unprotected_pdfs": ignored_unprotected_pdfs,
             "imported_invoices": imported,
             "duplicate_invoices": duplicates,
             "anchors_added": anchors_added,
+            "parser_version": _INVOICE_PARSER_VERSION,
+            "guard": self.runtime.data.get("invoice_import_guard"),
             "canonical_refresh": canonical_refresh,
-            "errors": errors[-20:],
+            "errors": errors,
         }
-        self.runtime.data["last_outlook_sync"] = result
-        await self.runtime.async_save()
-        self.runtime.async_notify()
-        return result
+        return await self._save_result(result)
