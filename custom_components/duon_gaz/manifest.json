@@ -5,7 +5,7 @@
   "documentation": "https://github.com/novygh/DUON-gaz",
   "config_flow": true,
   "single_config_entry": true,
-  "dependencies": ["application_credentials", "recorder"],
+  "dependencies": ["recorder"],
   "requirements": ["pypdf==6.18.0"],
   "iot_class": "cloud_polling"
 }
