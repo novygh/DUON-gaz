@@ -1,4 +1,4 @@
-"""Constants for DUON Gaz."""
+"""Stałe integracji DUON Gaz."""
 from __future__ import annotations
 
 DOMAIN = "duon_gaz"
@@ -13,12 +13,23 @@ CONF_SUBSCRIPTION_NET = "subscription_net"
 CONF_DIST_FIXED_NET = "dist_fixed_net"
 CONF_VAT = "vat"
 
-DEFAULT_CONVERSION_FACTOR = 11.334
-DEFAULT_GAS_RATE_NET = 0.22684
-DEFAULT_DIST_VAR_RATE_NET = 0.0854
-DEFAULT_SUBSCRIPTION_NET = 8.00
-DEFAULT_DIST_FIXED_NET = 8.39
-DEFAULT_VAT = 0.23
+CONF_OUTLOOK_FOLDER = "outlook_folder"
+CONF_OUTLOOK_SENDER = "outlook_sender"
+CONF_OUTLOOK_SUBJECT = "outlook_subject"
+CONF_INVOICE_PDF_PASSWORD = "invoice_pdf_password"
+CONF_OUTLOOK_CHECK_HOUR = "outlook_check_hour"
+CONF_MICROSOFT_CLIENT_ID = "microsoft_client_id"
+CONF_MICROSOFT_TOKEN = "microsoft_token"
 
-STORAGE_VERSION = 1
+DEFAULT_OUTLOOK_SENDER = "efaktura@duondstpl.nazwa.pl"
+DEFAULT_OUTLOOK_SUBJECT = "Duon e-faktura"
+DEFAULT_OUTLOOK_CHECK_HOUR = 20
+
+# Neutralny punkt startowy kalibracji fizycznej. Nie pochodzi z żadnej
+# konkretnej instalacji, kotła ani faktury. Po zebraniu wystarczającej liczby
+# kotwic gazomierza jest zastępowany kalibracją wyuczoną dla danej instalacji.
+DEFAULT_CO_M3_PER_KWH = 0.1
+DEFAULT_DHW_M3_PER_KWH = 0.1
+
+STORAGE_VERSION = 2
 STORAGE_KEY = "duon_gaz.data"

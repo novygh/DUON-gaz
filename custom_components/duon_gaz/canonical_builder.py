@@ -1,0 +1,252 @@
+"""Build settled, provisional and combined canonical DUON gas history."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
+
+from homeassistant.util import dt as dt_util
+
+from .canonical_history import (
+    CanonicalHistoryError,
+    CanonicalHistoryResult,
+    PhysicalAnchor,
+    SourcePoint,
+    build_canonical_history,
+)
+from .canonical_series import CombinedCanonicalSeries, merge_canonical_hours
+from .canonical_tail import ProvisionalTailResult, build_provisional_tail
+from .recorder_stats import async_get_hourly_recorder_series
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalBuild:
+    """One coherent canonical build from the same Recorder source series."""
+
+    settled: CanonicalHistoryResult
+    provisional: ProvisionalTailResult
+    combined: CombinedCanonicalSeries
+    summary: dict[str, Any]
+
+
+def _as_timestamp(value: Any):
+    if not isinstance(value, str):
+        return None
+    parsed = dt_util.parse_datetime(value)
+    if parsed is None or parsed.tzinfo is None:
+        return None
+    return parsed
+
+
+def _as_meter(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _anchors_from_runtime(runtime) -> list[PhysicalAnchor]:
+    anchors: list[PhysicalAnchor] = []
+    for reading in runtime._readings():
+        timestamp = _as_timestamp(reading.get("timestamp"))
+        meter = _as_meter(reading.get("meter_m3"))
+        if timestamp is None or meter is None:
+            continue
+        anchors.append(
+            PhysicalAnchor(
+                timestamp=timestamp,
+                meter_m3=meter,
+                source=str(reading.get("source") or "unknown"),
+                timestamp_precision=str(
+                    reading.get("timestamp_precision") or "exact"
+                ),
+            )
+        )
+    return anchors
+
+
+def _interval_audit(result: CanonicalHistoryResult) -> list[dict[str, Any]]:
+    ranked = sorted(
+        result.intervals,
+        key=lambda interval: (
+            abs((interval.scale_factor or 1.0) - 1.0),
+            interval.reconstructed_gap_hours,
+        ),
+        reverse=True,
+    )[:10]
+    return [
+        {
+            "start": interval.start.isoformat(),
+            "end": interval.end.isoformat(),
+            "physical_delta_m3": round(interval.physical_delta_m3, 6),
+            "provisional_m3": round(interval.provisional_m3, 6),
+            "scale_factor": (
+                None
+                if interval.scale_factor is None
+                else round(interval.scale_factor, 9)
+            ),
+            "reconstructed_gap_hours": interval.reconstructed_gap_hours,
+            "rollback_correction_kwh": round(
+                interval.rollback_correction_kwh, 6
+            ),
+            "quality": list(interval.quality),
+        }
+        for interval in ranked
+    ]
+
+
+async def async_build_canonical_bundle(runtime) -> CanonicalBuild:
+    """Build all canonical layers from one coherent Recorder source series."""
+    all_anchors = _anchors_from_runtime(runtime)
+    if len(all_anchors) < 2:
+        raise CanonicalHistoryError(
+            "Do rekonstrukcji historii potrzebne są co najmniej dwa punkty gazomierza."
+        )
+
+    heating_coeff = runtime.co_m3_per_kwh
+    dhw_coeff = runtime.dhw_m3_per_kwh
+    if heating_coeff is None or dhw_coeff is None:
+        raise CanonicalHistoryError("Brak współczynników kalibracji CO/CWU.")
+
+    fetch_end = max(
+        all_anchors[-1].timestamp + timedelta(hours=2),
+        dt_util.utcnow() + timedelta(hours=1),
+    )
+    snapshots = await async_get_hourly_recorder_series(
+        runtime.hass,
+        runtime.heating_entity,
+        runtime.dhw_entity,
+        all_anchors[0].timestamp - timedelta(hours=2),
+        fetch_end,
+    )
+    source_points = [
+        SourcePoint(
+            timestamp=snapshot.timestamp,
+            heating_sum_kwh=snapshot.heating_sum_kwh,
+            dhw_sum_kwh=snapshot.dhw_sum_kwh,
+        )
+        for snapshot in snapshots
+    ]
+    if len(source_points) < 2:
+        raise CanonicalHistoryError("Brak wystarczającej historii Recorder CO/CWU.")
+
+    source_start = source_points[0].timestamp
+    source_end = source_points[-1].timestamp + timedelta(hours=1)
+    anchors = [
+        anchor
+        for anchor in all_anchors
+        if source_start <= anchor.timestamp <= source_end
+    ]
+    if len(anchors) < 2:
+        raise CanonicalHistoryError(
+            "Historia Recorder nie obejmuje co najmniej dwóch punktów gazomierza."
+        )
+
+    settled = build_canonical_history(
+        source_points,
+        anchors,
+        heating_m3_per_kwh=heating_coeff,
+        dhw_m3_per_kwh=dhw_coeff,
+        timezone=dt_util.DEFAULT_TIME_ZONE,
+    )
+    provisional = build_provisional_tail(
+        source_points,
+        anchors[-1],
+        heating_m3_per_kwh=heating_coeff,
+        dhw_m3_per_kwh=dhw_coeff,
+        timezone=dt_util.DEFAULT_TIME_ZONE,
+    )
+    combined = merge_canonical_hours(settled.hours, provisional.hours)
+
+    scales = [
+        interval.scale_factor
+        for interval in settled.intervals
+        if interval.scale_factor is not None
+    ]
+    canonical_total = sum(hour.gas_m3 for hour in settled.hours)
+    physical_total = anchors[-1].meter_m3 - anchors[0].meter_m3
+    reconstructed_gap_hours = sum(
+        interval.reconstructed_gap_hours for interval in settled.intervals
+    )
+    rollback_correction = sum(
+        interval.rollback_correction_kwh for interval in settled.intervals
+    )
+    rollback_retracted = sum(
+        interval.rollback_retracted_kwh for interval in settled.intervals
+    )
+    rollback_unresolved = sum(
+        interval.unresolved_rollback_kwh for interval in settled.intervals
+    )
+
+    summary: dict[str, Any] = {
+        "generated_at": dt_util.utcnow().isoformat(),
+        "published_to_recorder": False,
+        "source_point_count": len(source_points),
+        "anchor_count_total": len(all_anchors),
+        "anchor_count": len(anchors),
+        "anchor_count_without_recorder": len(all_anchors) - len(anchors),
+        "interval_count": len(settled.intervals),
+        "canonical_hour_count": len(settled.hours),
+        "source_start": source_start.isoformat(),
+        "source_end": source_end.isoformat(),
+        "start": anchors[0].timestamp.isoformat(),
+        "end": anchors[-1].timestamp.isoformat(),
+        "start_meter_m3": anchors[0].meter_m3,
+        "end_meter_m3": anchors[-1].meter_m3,
+        "physical_total_m3": round(physical_total, 6),
+        "canonical_total_m3": round(canonical_total, 6),
+        "closure_error_m3": round(canonical_total - physical_total, 9),
+        "reconstructed_gap_hours": reconstructed_gap_hours,
+        "rollback_correction_kwh": round(rollback_correction, 6),
+        "rollback_retracted_kwh": round(rollback_retracted, 6),
+        "unresolved_rollback_kwh": round(rollback_unresolved, 6),
+        "low_confidence_interval_count": sum(
+            "low_confidence_scale" in interval.quality
+            for interval in settled.intervals
+        ),
+        "uncertain_anchor_interval_count": sum(
+            "uncertain_anchor_time" in interval.quality
+            for interval in settled.intervals
+        ),
+        "scale_factor_min": None if not scales else round(min(scales), 9),
+        "scale_factor_max": None if not scales else round(max(scales), 9),
+        "audit_intervals": _interval_audit(settled),
+        "provisional_hour_count": len(provisional.hours),
+        "provisional_start": (
+            provisional.hours[0].start.isoformat() if provisional.hours else None
+        ),
+        "provisional_end": provisional.source_end.isoformat(),
+        "provisional_m3": round(provisional.gas_m3, 6),
+        "provisional_meter_m3": round(provisional.estimated_meter_m3, 6),
+        "provisional_reconstructed_gap_hours": provisional.reconstructed_gap_hours,
+        "provisional_rollback_correction_kwh": round(
+            provisional.rollback_correction_kwh, 6
+        ),
+        "provisional_rollback_retracted_kwh": round(
+            provisional.rollback_retracted_kwh, 6
+        ),
+        "provisional_unresolved_rollback_kwh": round(
+            provisional.unresolved_rollback_kwh, 6
+        ),
+        "combined_hour_count": len(combined.hours),
+        "combined_overlap_hour_count": combined.overlap_hour_count,
+        "combined_start": (
+            combined.hours[0].start.isoformat() if combined.hours else None
+        ),
+        "combined_end": (
+            (combined.hours[-1].start + timedelta(hours=1)).isoformat()
+            if combined.hours
+            else None
+        ),
+        "combined_meter_m3": (
+            round(combined.hours[-1].cumulative_m3, 6)
+            if combined.hours
+            else None
+        ),
+    }
+    return CanonicalBuild(
+        settled=settled,
+        provisional=provisional,
+        combined=combined,
+        summary=summary,
+    )

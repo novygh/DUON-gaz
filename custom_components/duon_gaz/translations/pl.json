@@ -1,13 +1,76 @@
 {
   "title": "DUON Gaz",
   "config": {
+    "progress": {
+      "wait_for_microsoft": "Otwórz stronę Microsoft:\n\n{url}\n\ni wpisz kod:\n\n```{code}```\n\nZaloguj się do konta Outlook z fakturami DUON i zaakceptuj dostęp **Mail.Read**. Home Assistant automatycznie zakończy konfigurację po zatwierdzeniu."
+    },
     "step": {
       "user": {
         "title": "Konfiguracja DUON Gaz",
-        "description": "Wybierz liczniki energii gazowej z integracji Ariston i podaj ostatnie znane parametry rozliczeniowe.",
+        "description": "Wybierz sensory źródłowe CO i CWU oraz podaj parametry rozliczeniowe swojej umowy.",
         "data": {
-          "heating_entity": "Ariston – gaz CO [kWh]",
-          "dhw_entity": "Ariston – gaz CWU [kWh]",
+          "heating_entity": "Źródło CO [kWh]",
+          "dhw_entity": "Źródło CWU [kWh]",
+          "conversion_factor": "Współczynnik konwersji [kWh/m³]",
+          "gas_rate_net": "Cena gazu netto [PLN/kWh]",
+          "dist_var_rate_net": "Dystrybucja zmienna netto [PLN/kWh]",
+          "subscription_net": "Abonament netto [PLN/miesiąc]",
+          "dist_fixed_net": "Dystrybucja stała netto [PLN/miesiąc]",
+          "vat": "VAT (np. 0.23)"
+        }
+      },
+      "reconfigure": {
+        "title": "Połącz Outlook z DUON Gaz",
+        "description": "DUON Gaz używa Microsoft Device Code Flow jako klient publiczny — bez sekretu aplikacji i bez okresowej wymiany sekretu. W Microsoft Entra aplikacja musi mieć delegowane **Mail.Read** oraz włączone publiczne przepływy klienta. Po zapisaniu pojawi się kod jednorazowego logowania.",
+        "data": {
+          "microsoft_client_id": "Identyfikator aplikacji (Client ID) Microsoft",
+          "outlook_folder": "Folder Outlook lub pełna ścieżka folderu",
+          "outlook_sender": "Adres nadawcy faktur",
+          "outlook_subject": "Temat wiadomości",
+          "invoice_pdf_password": "Hasło do faktur PDF",
+          "outlook_check_hour": "Godzina codziennego sprawdzania (0–23)"
+        },
+        "data_description": {
+          "microsoft_client_id": "Identyfikator aplikacji z Microsoft Entra. To identyfikator publiczny, nie sekret klienta.",
+          "outlook_folder": "Nazwa albo ścieżka folderu, np. Dom/Faktury.",
+          "outlook_sender": "Wiadomości od innych nadawców są ignorowane.",
+          "outlook_subject": "Temat musi pasować dokładnie, bez rozróżniania wielkości liter.",
+          "invoice_pdf_password": "Pole jest maskowane. Przy ponownej konfiguracji można zostawić je puste, aby zachować dotychczasowe hasło.",
+          "outlook_check_hour": "Czas lokalny Home Assistanta."
+        }
+      },
+      "outlook_authorize": {
+        "title": "Zaloguj Outlook do DUON Gaz",
+        "description": "Otwórz w przeglądarce **{url}** i wpisz kod **{code}**. Zaloguj się do konta Outlook z fakturami DUON i zaakceptuj dostęp **Mail.Read**. Po zakończeniu wróć tutaj i kliknij **Zatwierdź**."
+      },
+      "reauth_confirm": {
+        "title": "Ponownie połącz Outlook",
+        "description": "Microsoft wymaga ponownego zalogowania. Kontynuuj, aby otrzymać nowy kod urządzenia. Nie jest potrzebny żaden sekret klienta."
+      },
+      "outlook_auth_error": {
+        "title": "Nie udało się połączyć z Microsoft",
+        "description": "Błąd logowania: `{error}`\n\nSprawdź ustawienia aplikacji Microsoft Entra. Powinna mieć delegowane **Mail.Read** i włączone publiczne przepływy klienta. Kliknij Wyślij, aby spróbować ponownie."
+      }
+    },
+    "error": {
+      "same_entity": "Wybierz dwa różne sensory źródłowe.",
+      "required": "Pole jest wymagane.",
+      "authorization_pending": "Logowanie Microsoft nie zostało jeszcze zakończone. Zaloguj się kodem pokazanym powyżej i spróbuj ponownie."
+    },
+    "abort": {
+      "single_instance_allowed": "DUON Gaz jest już skonfigurowany.",
+      "missing_client_id": "Brak identyfikatora aplikacji Microsoft. Użyj opcji Przekonfiguruj.",
+      "auth_session_missing": "Sesja logowania Microsoft wygasła. Uruchom konfigurację ponownie."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Konfiguracja DUON Gaz",
+        "description": "Zmień sensory źródłowe lub parametry rozliczeniowe. Dane połączenia Outlook pozostaną zachowane.",
+        "data": {
+          "heating_entity": "Źródło CO [kWh]",
+          "dhw_entity": "Źródło CWU [kWh]",
           "conversion_factor": "Współczynnik konwersji [kWh/m³]",
           "gas_rate_net": "Cena gazu netto [PLN/kWh]",
           "dist_var_rate_net": "Dystrybucja zmienna netto [PLN/kWh]",
@@ -18,10 +81,7 @@
       }
     },
     "error": {
-      "same_entity": "Wybierz dwa różne sensory Aristona."
-    },
-    "abort": {
-      "single_instance_allowed": "DUON Gaz jest już skonfigurowany."
+      "same_entity": "Wybierz dwa różne sensory źródłowe."
     }
   }
 }

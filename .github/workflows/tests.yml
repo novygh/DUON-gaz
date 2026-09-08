@@ -1,0 +1,25 @@
+name: Testy DUON Gaz
+
+on:
+  push:
+    branches:
+      - feature/store-v2-recorder-sums
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v5
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Uruchom testy
+        run: python -m unittest discover -s tests -v
