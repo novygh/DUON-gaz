@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    if: github.event.head_commit.message == 'DUON Gaz 0.4.2'
+    if: github.event.head_commit.message == 'Uruchom wydanie 0.4.2'
     runs-on: ubuntu-latest
     steps:
       - name: Pobierz repozytorium
@@ -21,6 +21,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create v0.4.2 \
-            --target "$GITHUB_SHA" \
+            --target "2682cabc64dc2c2f156fc2da3002d82e0c5e6b29" \
             --title "DUON Gaz 0.4.2" \
             --notes-file RELEASE_NOTES_0.4.2.md
