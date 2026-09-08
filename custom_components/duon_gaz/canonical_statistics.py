@@ -1,6 +1,7 @@
-"""Publish settled canonical DUON gas history as external Recorder statistics."""
+"""Publish canonical DUON gas history as external Recorder statistics."""
 from __future__ import annotations
 
+from datetime import datetime
 import math
 from typing import Any
 
@@ -18,8 +19,8 @@ from homeassistant.const import UnitOfVolume
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import VolumeConverter
 
+from .canonical_builder import async_build_canonical_bundle
 from .canonical_history import CanonicalHistoryError
-from .canonical_preview import async_build_canonical_history
 from .const import DOMAIN
 
 CANONICAL_GAS_STATISTIC_ID = f"{DOMAIN}:canonical_gas"
@@ -45,8 +46,24 @@ def _validate_monotonic(rows: list[StatisticData]) -> None:
         previous_sum = current_sum
 
 
-async def _async_verify_publication(runtime, expected_last_sum: float) -> dict[str, Any]:
-    """Wait for Recorder and verify the final imported canonical statistic row."""
+def _as_timestamp(value: Any) -> float | None:
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        parsed = dt_util.parse_datetime(value)
+        if parsed is not None:
+            return parsed.timestamp()
+    return None
+
+
+async def _async_verify_publication(
+    runtime,
+    expected_last_start: datetime,
+    expected_last_sum: float,
+) -> dict[str, Any]:
+    """Wait for Recorder and verify the newest imported canonical row."""
     recorder = get_instance(runtime.hass)
     await recorder.async_block_till_done()
 
@@ -76,6 +93,16 @@ async def _async_verify_publication(runtime, expected_last_sum: float) -> dict[s
             f"{last_sum} != {expected_last_sum}."
         )
 
+    last_start_ts = _as_timestamp(row.get("start"))
+    if last_start_ts is None:
+        raise CanonicalHistoryError(
+            "Recorder nie zwrócił czasu końcowego rekordu historii kanonicznej."
+        )
+    if abs(last_start_ts - expected_last_start.timestamp()) > 1.0:
+        raise CanonicalHistoryError(
+            "Końcowy czas historii w Recorder nie zgadza się z historią kanoniczną."
+        )
+
     return {
         "verified_at": dt_util.utcnow().isoformat(),
         "last_start": row.get("start"),
@@ -85,20 +112,27 @@ async def _async_verify_publication(runtime, expected_last_sum: float) -> dict[s
 
 
 async def async_publish_canonical_statistics(runtime) -> dict[str, Any]:
-    """Rebuild, publish and verify settled canonical gas statistics for Recorder.
+    """Rebuild, publish and verify settled history plus the provisional tail.
 
-    Only intervals closed by meter anchors are published. The open interval after
-    the newest anchor remains provisional and is deliberately excluded for now.
-    Existing Ariston statistics are never modified.
+    Settled intervals remain constrained by physical meter anchors. The open tail
+    is provisional and may be replaced by later publications when Recorder data
+    changes or a new physical meter anchor closes the interval. Existing Ariston
+    statistics are never modified.
     """
-    result, summary = await async_build_canonical_history(runtime)
-    if not result.hours:
+    build = await async_build_canonical_bundle(runtime)
+    summary = build.summary
+
+    if not build.combined.hours:
         raise CanonicalHistoryError("Historia kanoniczna nie zawiera godzin do publikacji.")
     if abs(float(summary["closure_error_m3"])) > 1e-6:
         raise CanonicalHistoryError("Historia kanoniczna nie domyka się do gazomierza.")
     if float(summary["unresolved_rollback_kwh"]) > 1e-6:
         raise CanonicalHistoryError(
-            "Historia zawiera nierozliczony rollback źródła i nie może być opublikowana."
+            "Historia rozliczona zawiera nierozliczony rollback źródła."
+        )
+    if float(summary["provisional_unresolved_rollback_kwh"]) > 1e-6:
+        raise CanonicalHistoryError(
+            "Bieżący ogon zawiera nierozliczony rollback źródła i nie może być opublikowany."
         )
 
     statistics = [
@@ -107,7 +141,7 @@ async def async_publish_canonical_statistics(runtime) -> dict[str, Any]:
             state=round(max(0.0, hour.gas_m3), 9),
             sum=round(hour.cumulative_m3, 9),
         )
-        for hour in result.hours
+        for hour in build.combined.hours
     ]
     _validate_monotonic(statistics)
 
@@ -124,22 +158,27 @@ async def async_publish_canonical_statistics(runtime) -> dict[str, Any]:
     requested_at = dt_util.utcnow().isoformat()
     publication = {
         "status": "publishing",
+        "mode": "settled_plus_provisional",
         "requested_at": requested_at,
         "verified": False,
         "statistic_id": CANONICAL_GAS_STATISTIC_ID,
         "row_count": len(statistics),
+        "settled_row_count": len(build.settled.hours),
+        "provisional_row_count": len(build.provisional.hours),
+        "overlap_hour_count": build.combined.overlap_hour_count,
         "start": statistics[0]["start"].isoformat(),
         "end": statistics[-1]["start"].isoformat(),
+        "published_through": summary["combined_end"],
         "first_sum_m3": statistics[0]["sum"],
         "last_sum_m3": statistics[-1]["sum"],
         "settled_through": summary["end"],
     }
 
-    # Official Recorder API. Repeated publication of the same hourly timestamps
-    # follows Recorder's normal statistics import path; no direct database access.
+    # Official Recorder API only; raw Ariston statistics are never rewritten.
     async_add_external_statistics(runtime.hass, metadata, statistics)
     verification = await _async_verify_publication(
         runtime,
+        statistics[-1]["start"],
         float(statistics[-1]["sum"]),
     )
 
@@ -155,6 +194,7 @@ async def async_publish_canonical_statistics(runtime) -> dict[str, Any]:
     summary["publication_verified_at"] = verification["verified_at"]
     summary["publication_statistic_id"] = CANONICAL_GAS_STATISTIC_ID
     summary["publication_row_count"] = len(statistics)
+    summary["publication_mode"] = publication["mode"]
 
     runtime.data["canonical_preview"] = summary
     runtime.data["canonical_publication"] = publication
