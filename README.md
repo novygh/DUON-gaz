@@ -1,78 +1,88 @@
 # DUON Gaz
 
-Niestandardowa integracja dla Home Assistanta do rekonstrukcji i bieżącego śledzenia zużycia gazu na podstawie fizycznych odczytów gazomierza oraz skumulowanych statystyk CO/CWU zapisanych w Recorder.
+Niestandardowa integracja dla Home Assistanta do rekonstrukcji i bieżącego śledzenia zużycia gazu na podstawie fizycznych odczytów gazomierza, skumulowanych statystyk CO/CWU zapisanych w Recorder oraz danych rozliczeniowych DUON.
 
-## Aktualny stan projektu
+## Aktualna wersja
 
-Aktualna wersja rozwojowa: **0.3.2**.
+**0.3.4** — stabilny snapshot zweryfikowany na działającej instalacji Home Assistant 2026.9.1.
 
-Prace nad linią 0.3.x są prowadzone na gałęzi:
+Szczegółowe informacje o wydaniu: [`RELEASE_NOTES_0.3.4.md`](RELEASE_NOTES_0.3.4.md).
 
-```text
-feature/store-v2-recorder-sums
-```
-
-oraz w roboczym PR #1.
-
-Gałąź `main` nadal zawiera starszą wersję kodu do czasu zakończenia testów i scalenia bieżących zmian.
-
-## Co potrafi wersja 0.3.2
+## Co potrafi 0.3.4
 
 - wybiera dowolne dwa sensory Home Assistanta jako źródła CO i CWU,
 - korzysta ze skumulowanych statystyk `sum` z Recorder,
 - zapisuje dokładne fizyczne odczyty gazomierza,
 - osobno kalibruje CO i CWU w m³/kWh,
-- używa neutralnej kalibracji startowej 0,1 m³/kWh tylko do czasu wyuczenia współczynników dla konkretnej instalacji,
 - rekonstruuje brakujące godziny,
-- obsługuje ujemne korekty/rollbacki źródła bez tworzenia ujemnego zużycia,
+- obsługuje korekty/rollbacki źródła bez tworzenia ujemnego zużycia,
 - dokładnie domyka rozliczone okresy do fizycznego gazomierza,
 - buduje bieżący szacowany ogon po ostatnim odczycie,
-- publikuje jedną monotoniczną statystykę Recorder:
+- publikuje monotoniczną statystykę Recorder:
 
 ```text
 duon_gaz:canonical_gas
 ```
 
 - automatycznie odświeża bieżący ogon po wygenerowaniu nowych godzinowych statystyk Recorder,
-- pozwala później zmienić sensory źródłowe i parametry rozliczeniowe przez **Konfiguruj**,
-- nie zawiera instalacyjnych wartości domyślnych taryf,
+- wykonuje pełny rebuild po zmianie aktywnego zestawu kotwic,
+- importuje zaszyfrowane faktury PDF DUON przez parser `pypdf`, bez OCR,
+- obsługuje starsze i nowsze układy faktur oraz zmiany stawek w okresie rozliczeniowym,
+- automatycznie pobiera faktury z Microsoft Outlook / Graph,
+- działa fail-closed: nierozpoznana zaszyfrowana faktura blokuje całą nową paczkę bez częściowego zapisu,
+- zapisuje paczkę faktur atomowo i weryfikuje Store po zapisie,
 - nie modyfikuje surowych statystyk źródłowych CO/CWU.
 
 ## Wymagania
 
 - Home Assistant z włączonym Recorder,
 - dwa sensory źródłowe CO/CWU posiadające statystyki `sum`,
-- fizyczne lub zaufane odczyty gazomierza do rozliczania i uczenia kalibracji.
+- fizyczne lub zaufane odczyty gazomierza,
+- dla importu PDF: wymaganie `pypdf` jest instalowane z `manifest.json`.
 
 Jeżeli `recorder:` korzysta z `include:`, wybrane sensory CO i CWU muszą znajdować się na liście dozwolonych encji.
 
 `duon_gaz:canonical_gas` jest statystyką zewnętrzną, a nie stanem encji, dlatego nie trzeba dodawać jej do `recorder.include.entities`.
 
-## Instalacja wersji rozwojowej
+## Instalacja ręczna
 
-Do czasu scalenia 0.3.x używaj katalogu:
+Skopiuj katalog:
 
 ```text
 custom_components/duon_gaz
 ```
 
-z gałęzi:
-
-```text
-feature/store-v2-recorder-sums
-```
-
-Skopiuj go do:
+do:
 
 ```text
 /config/custom_components/duon_gaz
 ```
 
-i uruchom ponownie Home Assistanta po wymianie plików.
+i uruchom ponownie Home Assistanta.
 
 Następnie:
 
 **Ustawienia → Urządzenia i usługi → Dodaj integrację → DUON Gaz**
+
+## Outlook / Microsoft Graph
+
+Automatyczny import korzysta z Device Code Flow dla publicznego klienta Microsoft.
+
+Zakres dostępu:
+
+```text
+offline_access Mail.Read
+```
+
+Integracja nie wymaga `client_secret`, nie prosi o `Mail.ReadWrite`, nie wysyła wiadomości, nie przenosi ich i nie usuwa.
+
+Niezabezpieczone PDF-y informacyjne są ignorowane przez importer faktur. Zaszyfrowany PDF, którego parser nie potrafi bezpiecznie zweryfikować, blokuje całą nową paczkę.
+
+Ręczna synchronizacja jest dostępna jako:
+
+```text
+duon_gaz.sync_outlook
+```
 
 ## Priorytet źródeł danych
 
@@ -82,14 +92,37 @@ Następnie:
 4. dane rozliczeniowe z faktur,
 5. bieżące szacunki po najnowszej fizycznej kotwicy.
 
-## Bezpieczeństwo danych
+Kotwice fakturowe są domyślnie wyłączone z uczenia kalibracji CO/CWU. Zgodny ręczny odczyt ma pierwszeństwo przed kotwicą z faktury.
 
-DUON Gaz korzysta z interfejsów Home Assistant Recorder. Nie zapisuje bezpośrednio do SQL i nie nadpisuje oryginalnych statystyk CO/CWU.
+## Bezpieczeństwo danych historycznych
 
-## Jeszcze do zrobienia
+DUON Gaz korzysta z oficjalnych interfejsów Home Assistant Recorder. Nie zapisuje bezpośrednio do SQL i nie nadpisuje oryginalnych statystyk CO/CWU.
 
-- automatyczne pobieranie faktur z Outlook/Microsoft Graph,
-- pełna obsługa zaszyfrowanych faktur PDF,
-- przygotowanie/wysyłanie SMS,
-- finalna migracja konfiguracji Energy Dashboard,
-- scalenie linii 0.3.x do `main` i stabilne wydanie HACS.
+Historia kanoniczna jest przechowywana pod własnym identyfikatorem:
+
+```text
+duon_gaz:canonical_gas
+```
+
+## Stan walidacji 0.3.4
+
+Na działającej instalacji potwierdzono m.in.:
+
+- pełną synchronizację historycznych wiadomości Outlook,
+- parser v3 na rzeczywistych starszych i nowszych fakturach,
+- poprawne pomijanie niezabezpieczonych dokumentów informacyjnych,
+- fail-closed bez częściowego importu,
+- atomowy zapis paczki i `invoice_import_guard: ok`,
+- brak wpływu kotwic fakturowych na istniejącą kalibrację,
+- dokładne domknięcie historii kanonicznej do fizycznego gazomierza,
+- brak ujemnego zużycia i nierozliczonych rollbacków,
+- zweryfikowaną publikację historii kanonicznej do Recorder.
+
+## Dalszy rozwój
+
+Po wydaniu 0.3.4 rozwijane są osobno:
+
+- kanoniczne statystyki CO i CWU,
+- kanoniczne statystyki kosztowe,
+- finalna konfiguracja Dashboardu Energii,
+- SMS.
