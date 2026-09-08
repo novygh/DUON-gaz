@@ -23,23 +23,27 @@ import_invoice:
   fields:
     path:
       name: Plik PDF
-      description: Ścieżka do faktury względem katalogu /config, np. duon/faktura.pdf.
+      description: Ścieżka do faktury względem katalogu /config, np. DUON/faktura.pdf.
       required: true
       selector:
         text:
     password:
       name: Hasło do PDF
-      description: Hasło służy tylko do bieżącego odczytu faktury i nie jest zapisywane przez integrację.
-      required: true
+      description: Opcjonalne. Po skonfigurowaniu automatyzacji Outlook używane jest zapisane hasło do faktur.
+      required: false
       selector:
         text:
           type: password
     source_message_id:
       name: Identyfikator wiadomości
-      description: Opcjonalny identyfikator wiadomości źródłowej, używany później przez automatyczny import z poczty.
+      description: Opcjonalny identyfikator wiadomości źródłowej do audytu.
       required: false
       selector:
         text:
+
+sync_outlook:
+  name: Sprawdź Outlook teraz
+  description: Sprawdza skonfigurowany folder Outlook, pobiera nowe faktury DUON, odszyfrowuje je zapisanym hasłem i importuje bez ponownego pytania o hasło.
 
 refresh_tail:
   name: Odśwież bieżący ogon
