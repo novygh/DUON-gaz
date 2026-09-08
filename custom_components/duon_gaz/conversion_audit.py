@@ -239,18 +239,26 @@ def build_conversion_audit(
     *,
     timezone: tzinfo,
 ) -> ConversionAuditResult:
-    """Porównaj energię rozliczeniową faktur z lokalnym modelem opartym o Ariston.
+    """Porównaj faktury z kroczącym lokalnym modelem energii Ariston.
 
-    Model nie jest pomiarem laboratoryjnym ciepła spalania. Stałą relację między
-    energią raportowaną przez Ariston a energią rozliczeniową usuwa dwuskładnikowy
-    model CO/CWU. Wynik pokazuje wyłącznie odchylenie faktur od tej lokalnej relacji.
+    Pierwsze okresy tworzą bazę CO/CWU. Każda kolejna faktura jest oceniana
+    wyłącznie modelem dopasowanym do wcześniejszych okresów, więc oceniana
+    faktura nie może sama zmniejszyć własnego odchylenia. Po ocenie staje się
+    częścią historii uczącej dla następnych okresów.
+
+    Model nie jest pomiarem laboratoryjnym ciepła spalania i służy wyłącznie
+    do diagnostyki zmian relacji faktura DUON <-> lokalne dane Ariston.
     """
     rows = sorted(list(hours), key=lambda row: row.start)
     if len(rows) < 2:
         raise ConversionAuditError("Brak historii kanonicznej do audytu konwersji.")
 
     periods = [item for item in billing_periods if isinstance(item, dict)]
-    periods.sort(key=lambda item: str((item.get("current_reading") or {}).get("date") or ""))
+    periods.sort(
+        key=lambda item: str(
+            (item.get("current_reading") or {}).get("date") or ""
+        )
+    )
 
     samples: list[_AuditSample] = []
     skipped_outside_or_incomplete = 0
@@ -266,22 +274,26 @@ def build_conversion_audit(
             continue
         samples.append(sample)
 
-    if len(samples) < _MIN_MODEL_SAMPLES:
+    required = _MIN_MODEL_SAMPLES + 1
+    if len(samples) < required:
         raise ConversionAuditError(
-            f"Za mało pełnych okresów do audytu konwersji: {len(samples)} < {_MIN_MODEL_SAMPLES}."
+            "Za mało pełnych okresów do kroczącego audytu konwersji: "
+            f"{len(samples)} < {required}."
         )
 
-    co_coeff, dhw_coeff, mae_kwh = _robust_fit(samples)
     history: list[dict[str, Any]] = []
     cumulative_pln = 0.0
+    latest_model: tuple[float, float, float] | None = None
 
-    for sample in samples:
-        predicted_kwh = (
-            co_coeff * sample.heating_kwh
-            + dhw_coeff * sample.dhw_kwh
-        )
+    for index in range(_MIN_MODEL_SAMPLES, len(samples)):
+        sample = samples[index]
+        co_coeff, dhw_coeff, mae_kwh = _robust_fit(samples[:index])
+        latest_model = (co_coeff, dhw_coeff, mae_kwh)
+
+        predicted_kwh = co_coeff * sample.heating_kwh + dhw_coeff * sample.dhw_kwh
         if predicted_kwh <= _EPSILON:
             continue
+
         residual_kwh = sample.billed_kwh - predicted_kwh
         delta_pln = residual_kwh * sample.gross_variable_rate_pln_kwh
         cumulative_pln += delta_pln
@@ -301,6 +313,10 @@ def build_conversion_audit(
                 "invoice_number": sample.invoice_number,
                 "start": sample.start.isoformat(),
                 "end": sample.end.isoformat(),
+                "training_sample_count": index,
+                "model_co_multiplier": round(co_coeff, 9),
+                "model_dhw_multiplier": round(dhw_coeff, 9),
+                "model_mae_kwh": round(mae_kwh, 6),
                 "duon_kwh_m3": round(sample.invoice_factor_kwh_m3, 6),
                 "local_model_kwh_m3": round(local_factor, 6),
                 "raw_ariston_kwh_m3": round(raw_local_yield, 6),
@@ -313,15 +329,19 @@ def build_conversion_audit(
             }
         )
 
-    if not history:
-        raise ConversionAuditError("Audyt konwersji nie utworzył żadnego punktu historii.")
+    if not history or latest_model is None:
+        raise ConversionAuditError("Audyt konwersji nie utworzył żadnego punktu oceny.")
 
+    co_coeff, dhw_coeff, mae_kwh = latest_model
     last = history[-1]
     return ConversionAuditResult(
         data={
             "status": "ok",
-            "method": "robust_two_component_local_energy_model",
+            "method": "walk_forward_robust_two_component_local_energy_model",
             "sample_count": len(samples),
+            "baseline_sample_count": _MIN_MODEL_SAMPLES,
+            "evaluated_count": len(history),
+            "model_training_sample_count": last["training_sample_count"],
             "model_co_billed_kwh_per_ariston_kwh": round(co_coeff, 9),
             "model_dhw_billed_kwh_per_ariston_kwh": round(dhw_coeff, 9),
             "model_co_apparent_efficiency_percent": round(100.0 / co_coeff, 4),
