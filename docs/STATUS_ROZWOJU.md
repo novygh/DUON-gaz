@@ -130,6 +130,8 @@ Przed zapisaniem nowej paczki faktur wykonywany jest preflight. Jeżeli choć je
 
 Po aktualizacji parsera dokument ma zostać automatycznie podjęty ponownie.
 
+Kod bezpiecznika jest już na gałęzi rozwojowej, ale nie został jeszcze załadowany i zweryfikowany w działającej instalacji po ostatnim restarcie. Następny restart ma być wspólny dla poprawek parsera, runtime i synchronizatora Outlook.
+
 ## Reautoryzacja Microsoft
 
 Obecny kod potrafi automatycznie rozpocząć reauth po błędzie tokenu lub autoryzacji Graph. Docelowo przed wydaniem 0.3.4 należy dodatkowo zapewnić użytkownikowi prostą, jednoznaczną ścieżkę **Połącz ponownie Outlook** bez terminala, plików i wchodzenia do Microsoft Entra.
