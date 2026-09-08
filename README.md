@@ -2,10 +2,10 @@
 
 Niestandardowa integracja dla Home Assistanta, która łączy fizyczne odczyty gazomierza ze skumulowanymi statystykami CO/CWU i buduje jedną skorygowaną historię zużycia gazu w Recorder.
 
-Aktualna wersja rozwojowa: **0.3.2**.
+Aktualna wersja rozwojowa: **0.3.3**.
 
 > [!IMPORTANT]
-> Wersja 0.3.2 jest nadal testowana na gałęzi `feature/store-v2-recorder-sums`. Gałąź `main` pozostaje starszą wersją kodu do czasu scalenia bieżących zmian.
+> Wersja 0.3.3 jest nadal testowana na gałęzi `feature/store-v2-recorder-sums`. Gałąź `main` pozostaje starszą wersją kodu do czasu scalenia bieżących zmian.
 
 ## Co robi
 
@@ -13,7 +13,7 @@ DUON Gaz korzysta z trzech warstw danych:
 
 1. **fizyczne odczyty gazomierza** — nadrzędne kotwice w m³,
 2. **skumulowane statystyki CO/CWU z Recorder** — godzinowy profil zużycia,
-3. **dane rozliczeniowe DUON** — współczynnik konwersji i taryfy używane do obliczeń energii oraz kosztów.
+3. **dane rozliczeniowe DUON** — współczynnik konwersji, taryfy i dane z faktur.
 
 Integracja potrafi:
 
@@ -30,7 +30,8 @@ Integracja potrafi:
 - automatycznie odświeżać bieżący ogon po nowych godzinowych statystykach Recorder,
 - przyrostowo zapisywać tylko część od ostatniej kotwicy,
 - automatycznie przechodzić do pełnej przebudowy po zmianie kotwicy, kalibracji lub źródła,
-- pozwalać na zmianę źródeł i parametrów rozliczeniowych przez **Konfiguruj**.
+- pozwalać na zmianę źródeł i parametrów rozliczeniowych przez **Konfiguruj**,
+- ręcznie importować zaszyfrowane faktury PDF DUON znajdujące się w `/config`.
 
 Surowe statystyki źródłowe nie są modyfikowane.
 
@@ -118,7 +119,7 @@ Formularz wymaga wpisania wartości właściwych dla własnej instalacji:
 - miesięcznej stałej opłaty dystrybucyjnej netto,
 - VAT jako liczby dziesiętnej (`0.23` = 23%).
 
-**Integracja nie podpowiada już taryf z instalacji używanej podczas tworzenia projektu.**
+**Integracja nie podpowiada taryf z instalacji używanej podczas tworzenia projektu.**
 
 Po instalacji wartości można zmienić przez:
 
@@ -134,6 +135,38 @@ Zmiana źródła lub kalibracji powoduje bezpieczne przejście z przyrostowego o
 4. Kalibracja zostanie przeliczona, gdy liczba wiarygodnych przedziałów pozwoli rozdzielić wpływ CO i CWU.
 
 Nowe ręczne odczyty są zapisywane z precyzją 0,001 m³. Osobno może być przechowywana wartość zaokrąglona do pełnych m³ na potrzeby przyszłego mechanizmu SMS.
+
+## Import faktury PDF
+
+Od wersji 0.3.3 integracja posiada ręczną usługę:
+
+```text
+duon_gaz.import_invoice
+```
+
+Plik PDF musi znajdować się wewnątrz katalogu `/config`. Integracja nie pozwala tej usłudze czytać plików spoza `/config`.
+
+Przykładowy plik:
+
+```text
+/config/duon/faktura.pdf
+```
+
+W wywołaniu usługi podaje się:
+
+- `path` — ścieżkę względem `/config`, np. `duon/faktura.pdf`,
+- `password` — hasło do zaszyfrowanego PDF,
+- opcjonalnie `source_message_id` — identyfikator wiadomości źródłowej, przygotowany z myślą o późniejszym imporcie z Microsoft Graph.
+
+Hasło do PDF jest używane tylko podczas bieżącego odczytu i **nie jest zapisywane przez integrację**.
+
+Parser korzysta z `pypdf` i nie używa OCR. Odczytane dane są przed zapisem sprawdzane pod kątem zgodności zużycia m³, wskazań licznika i energii rozliczeniowej.
+
+Jeżeli bieżący odczyt na fakturze ma literalny typ **Rozliczeniowy**, może zostać użyty jako zaufana kotwica o precyzji dziennej. Odczyty szacowane pozostają wyłącznie danymi rozliczeniowymi.
+
+Jeżeli w pobliżu istnieje zgodny ręczny odczyt gazomierza, odczyt z faktury zostaje zapisany audytowo, ale nie zastępuje dokładniejszej ręcznej kotwicy.
+
+Dodanie nowej zaufanej kotwicy powoduje automatyczną przebudowę odpowiedniej historii kanonicznej. Ponowny import tego samego numeru faktury jest idempotentny.
 
 ## Rekonstrukcja historii
 
@@ -151,7 +184,7 @@ Algorytm jest ogólny i nie zawiera dat, odczytów, encji ani taryf konkretnej i
 
 ## Automatyczne odświeżanie bieżącego ogona
 
-Od 0.3.1 integracja nasłuchuje zdarzenia wygenerowania godzinowych statystyk Recorder. Jeżeli podstawa historii się nie zmieniła, zapisuje wyłącznie bieżący ogon od ostatniej fizycznej kotwicy.
+Integracja nasłuchuje zdarzenia wygenerowania godzinowych statystyk Recorder. Jeżeli podstawa historii się nie zmieniła, zapisuje wyłącznie bieżący ogon od ostatniej fizycznej kotwicy.
 
 Jeżeli zmieni się:
 
@@ -199,14 +232,15 @@ Na instalacji testowej potwierdzono:
 - poprawne scalenie godziny granicznej,
 - przyrostowe odświeżenie tylko bieżącego ogona,
 - automatyczne uruchomienie odświeżenia po zdarzeniu godzinowym Recorder,
-- weryfikację końcowego czasu i sumy przez API Recorder.
+- weryfikację końcowego czasu i sumy przez API Recorder,
+- zachowanie istniejącej wyuczonej kalibracji podczas migracji 0.3.2.
 
 Dane liczbowe z instalacji testowej nie są zakodowane w integracji.
 
 ## Jeszcze do zrobienia
 
 - automatyczne pobieranie faktur z Outlook/Microsoft Graph,
-- pełna obsługa zaszyfrowanych faktur PDF,
+- bezpieczna konfiguracja danych potrzebnych do automatycznego odszyfrowywania faktur,
 - przygotowanie i wysyłanie SMS,
 - finalna migracja konfiguracji Energy Dashboard,
 - scalenie linii 0.3.x do `main` i stabilne wydanie HACS.
