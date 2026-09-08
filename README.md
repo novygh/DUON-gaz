@@ -1,11 +1,11 @@
 # DUON Gaz
 
-Niestandardowa integracja dla Home Assistanta, która łączy fizyczzne odczyty gazomierza ze skumulowanymi statystykami CO/CWU z integracji kotła i buduje jedną skorygowaną historię zużycia gazu w Recorder.
+Niestandardowa integracja dla Home Assistanta, która łączy fizyczne odczyty gazomierza ze skumulowanymi statystykami CO/CWU i buduje jedną skorygowaną historię zużycia gazu w Recorder.
 
-Aktualna wersja rozwojowa: **0.3.1**.
+Aktualna wersja rozwojowa: **0.3.2**.
 
 > [!IMPORTANT]
-> Wersja 0.3.1 jest nadal testowana na gałęzi rozwojowej `feature/store-v2-recorder-sums`. Gałąź `main` pozostaje starszą wersją testową do czasu scalenia bieżących zmian.
+> Wersja 0.3.2 jest nadal testowana na gałęzi `feature/store-v2-recorder-sums`. Gałąź `main` pozostaje starszą wersją kodu do czasu scalenia bieżących zmian.
 
 ## Co robi
 
@@ -13,7 +13,7 @@ DUON Gaz korzysta z trzech warstw danych:
 
 1. **fizyczne odczyty gazomierza** — nadrzędne kotwice w m³,
 2. **skumulowane statystyki CO/CWU z Recorder** — godzinowy profil zużycia,
-3. **dane rozliczeniowe DUON** — współczynnik konwersji i taryfy używane do obliczeń energii i kosztów.
+3. **dane rozliczeniowe DUON** — współczynnik konwersji i taryfy używane do obliczeń energii oraz kosztów.
 
 Integracja potrafi:
 
@@ -22,13 +22,15 @@ Integracja potrafi:
 - zapisywać dokładne fizyczne odczyty gazomierza wraz z czasem,
 - przechowywać zaufane odczyty z faktur jako kotwice o niższej precyzji,
 - osobno kalibrować CO i CWU w m³/kWh,
-- rekonstruować brakujące dane godzinowe źródła,
-- obsługiwać ujemne korekty/rollbacki źródła bez tworzenia ujemnego zużycia gazu,
+- rekonstruować brakujące dane godzinowe,
+- obsługiwać ujemne korekty źródła bez tworzenia ujemnego zużycia gazu,
 - dokładnie domykać rozliczone przedziały do fizycznych odczytów gazomierza,
 - budować bieżący szacowany ogon po najnowszym fizycznym odczycie,
-- publikować jedną monotoniczną statystykę zewnętrzną: `duon_gaz:canonical_gas`,
-- automatycznie odświeżać bieżący ogon po wygenerowaniu nowych godzinowych statystyk Recorder,
-- obliczać szacowany bieżący stan gazomierza, podział CO/CWU, energię i diagnostykę kosztów.
+- publikować jedną monotoniczną statystykę zewnętrzną `duon_gaz:canonical_gas`,
+- automatycznie odświeżać bieżący ogon po nowych godzinowych statystykach Recorder,
+- przyrostowo zapisywać tylko część od ostatniej kotwicy,
+- automatycznie przechodzić do pełnej przebudowy po zmianie kotwicy, kalibracji lub źródła,
+- pozwalać na zmianę źródeł i parametrów rozliczeniowych przez **Konfiguruj**.
 
 Surowe statystyki źródłowe nie są modyfikowane.
 
@@ -49,17 +51,19 @@ Historia ma dwie części:
 
 Gdy najnowszy fizyczny odczyt wypada wewnątrz godziny, DUON Gaz scala część rozliczoną i bieżącą w jeden rekord Recorder dla tej godziny.
 
-Od wersji 0.3.1 bieżący ogon jest odświeżany automatycznie po zdarzeniu wygenerowania godzinowych statystyk przez Home Assistanta. Pełna przebudowa jest wykonywana, gdy zmieni się kotwica, kalibracja albo źródło.
+## Kalibracja
 
-## Wymagania
+Nowa instalacja zaczyna od neutralnej wartości **0,1 m³/kWh** osobno dla CO i CWU. Jest to wyłącznie techniczny punkt startowy, a nie wartość pochodząca z konkretnego kotła, taryfy lub instalacji.
 
-- Home Assistant z włączonym **Recorder**.
-- Dwa sensory źródłowe reprezentujące skumulowane zużycie CO i CWU i posiadające statystyki `sum` w Recorder.
-- Co najmniej dwie zaufane kotwice gazomierza do rozliczonej rekonstrukcji i kalibracji.
+Po zebraniu wystarczającej liczby wiarygodnych przedziałów między odczytami gazomierza integracja wyznacza osobne współczynniki CO i CWU dla danej instalacji. Fizyczny gazomierz pozostaje nadrzędnym źródłem prawdy, więc zamknięte przedziały są zawsze domykane do rzeczywistej różnicy m³.
 
-### Konfiguracja `recorder.include`
+## Wymagania Recorder
 
-Jeżeli konfiguracja `recorder:` korzysta z `include:`, wybrane sensory źródłowe CO i CWU muszą się tam znaleźć. W przeciwnym razie Home Assistant nie będzie miał wymaganej historii źródłowej.
+- Home Assistant z włączonym **Recorder**,
+- dwa sensory źródłowe reprezentujące skumulowane zużycie CO i CWU i posiadające statystyki `sum`,
+- fizyczne lub zaufane odczyty gazomierza do rozliczania i uczenia kalibracji.
+
+Jeżeli konfiguracja `recorder:` korzysta z `include:`, wybrane sensory CO i CWU muszą się tam znaleźć.
 
 Przykład:
 
@@ -71,13 +75,11 @@ recorder:
       - sensor.twoj_kociol_zuzycie_gazu_cwu
 ```
 
-`duon_gaz:canonical_gas` jest **statystyką zewnętrzną**, a nie stanem encji, dlatego nie trzeba jej dodawać do `recorder.include.entities`.
+`duon_gaz:canonical_gas` jest **statystyką zewnętrzną**, a nie stanem encji, dlatego nie trzeba dodawać jej do `recorder.include.entities`.
 
-## Instalacja
+## Instalacja wersji rozwojowej
 
-### Aktualna gałąź rozwojowa
-
-Do czasu scalenia 0.3.x do `main` należy używać katalogu:
+Skopiuj katalog:
 
 ```text
 custom_components/duon_gaz
@@ -89,138 +91,122 @@ z gałęzi:
 feature/store-v2-recorder-sums
 ```
 
-Skopiuj go do:
+do:
 
 ```text
 /config/custom_components/duon_gaz
 ```
 
-i uruchom ponownie Home Assistanta po wymianie plików integracji.
+i uruchom ponownie Home Assistanta.
 
-Następnie otwórz:
+Następnie:
 
 **Ustawienia → Urządzenia i usługi → Dodaj integrację → DUON Gaz**
 
-### HACS
+Repozytorium zawiera `hacs.json`. Normalna instalacja HACS z gałęzi domyślnej będzie właściwa po scaleniu linii 0.3.x do `main`.
 
-Repozytorium zawiera już `hacs.json`. Normalnej instalacji przez HACS z gałęzi domyślnej należy używać po scaleniu bieżącej gałęzi rozwojowej do `main`.
+## Konfiguracja
 
-## Konfiguracja początkowa
+Formularz wymaga wpisania wartości właściwych dla własnej instalacji:
 
-Formularz konfiguracji pyta o:
+- sensora źródłowego CO,
+- sensora źródłowego CWU,
+- rozliczeniowego współczynnika konwersji w kWh/m³,
+- ceny gazu netto za kWh,
+- zmiennej stawki dystrybucyjnej netto za kWh,
+- miesięcznego abonamentu netto,
+- miesięcznej stałej opłaty dystrybucyjnej netto,
+- VAT jako liczby dziesiętnej (`0.23` = 23%).
 
-- sensor źródłowy CO,
-- sensor źródłowy CWU,
-- rozliczeniowy współczynnik konwersji w kWh/m³,
-- cenę gazu netto za kWh,
-- zmienną stawkę dystrybucyjną netto za kWh,
-- miesięczny abonament netto,
-- miesięczną stałą opłatę dystrybucyjną netto,
-- VAT jako wartość dziesiętną (`0.23` = 23%).
+**Integracja nie podpowiada już taryf z instalacji używanej podczas tworzenia projektu.**
 
-Encje źródłowe są konfigurowalne; silnik rekonstrukcji nie ma na stałe wpisanych identyfikatorów encji Ariston.
+Po instalacji wartości można zmienić przez:
 
-> [!WARNING]
-> Wartości domyślne w aktualnej wersji rozwojowej są jedynie wartościami startowymi/przykładowymi z instalacji używanej podczas tworzenia integracji. Należy wpisać wartości właściwe dla własnej umowy i faktur. Nie są to uniwersalne taryfy DUON.
+**Ustawienia → Urządzenia i usługi → DUON Gaz → Konfiguruj**
+
+Zmiana źródła lub kalibracji powoduje bezpieczne przejście z przyrostowego odświeżenia ogona do pełnej przebudowy historii kanonicznej.
 
 ## Dodawanie fizycznego odczytu gazomierza
 
 1. Wpisz dokładny bieżący stan gazomierza w encji liczbowej DUON Gaz.
 2. Naciśnij **Zapisz odczyt gazomierza**.
-3. DUON Gaz zapisze odczyt wraz z czasem i spójnym punktem źródłowym z Recorder.
-4. Gdy dostępna będzie wystarczająca liczba zaufanych odczytów, kalibracja CO/CWU zostanie przeliczona.
+3. DUON Gaz zapisze odczyt wraz z czasem i spójną migawką źródeł Recorder.
+4. Kalibracja zostanie przeliczona, gdy liczba wiarygodnych przedziałów pozwoli rozdzielić wpływ CO i CWU.
 
-Nowe odczyty ręczne są zapisywane z precyzją 0,001 m³. Osobno przechowywana jest wartość zaokrąglona do pełnych m³ na potrzeby przyszłego mechanizmu SMS.
-
-Fizyczne odczyty są źródłem o najwyższym priorytecie. Odczyty z faktur mogą być używane wyłącznie wtedy, gdy są sklasyfikowane jako zaufane odczyty rozliczeniowe; wartości szacowane na fakturze nie są fizycznymi kotwicami.
+Nowe ręczne odczyty są zapisywane z precyzją 0,001 m³. Osobno może być przechowywana wartość zaokrąglona do pełnych m³ na potrzeby przyszłego mechanizmu SMS.
 
 ## Rekonstrukcja historii
 
-Integracja zawiera ogólny silnik rekonstrukcji. Nie opiera się on na datach ani stanach gazomierza właściwych dla jednej instalacji.
-
-Dla każdego zamkniętego przedziału gazomierza:
+Dla każdego zamkniętego przedziału gazomierza integracja:
 
 - wylicza godzinowe przyrosty CO/CWU ze skumulowanych sum Recorder,
-- wycofuje rollbacki źródła z ostatniego dodatniego zużycia,
+- wycofuje ujemne korekty źródła z ostatniego dodatniego zużycia,
 - rekonstruuje brakujące godziny na podstawie profili tej samej lokalnej godziny,
-- niezależnie przelicza CO i CWU za pomocą skalibrowanych współczynników m³/kWh,
-- skaluje cały przedział do zmierzonej fizycznej różnicy m³,
+- niezależnie przelicza CO i CWU za pomocą współczynników m³/kWh,
+- skaluje przedział do zmierzonej fizycznej różnicy m³,
 - zachowuje proporcję CO/CWU,
-- sprawdza dokładne domknięcie przedziału.
+- sprawdza dokładne domknięcie.
 
-Oryginalne statystyki kotła pozostają nietknięte.
+Algorytm jest ogólny i nie zawiera dat, odczytów, encji ani taryf konkretnej instalacji.
 
-## Usługi
+## Automatyczne odświeżanie bieżącego ogona
 
-### `duon_gaz.refresh_tail`
+Od 0.3.1 integracja nasłuchuje zdarzenia wygenerowania godzinowych statystyk Recorder. Jeżeli podstawa historii się nie zmieniła, zapisuje wyłącznie bieżący ogon od ostatniej fizycznej kotwicy.
 
-Ręcznie odświeża wyłącznie otwartą, bieżącą część `duon_gaz:canonical_gas`.
+Jeżeli zmieni się:
 
-Zwykle nie jest to potrzebne, ponieważ od wersji 0.3.1 integracja nasłuchuje godzinowych statystyk Recorder i automatycznie odświeża ogon.
+- fizyczna kotwica,
+- źródło CO,
+- źródło CWU,
+- kalibracja,
 
-Jeżeli zmieniła się fizyczna kotwica, źródło albo kalibracja, integracja automatycznie przechodzi do pełnej przebudowy historii kanonicznej.
+integracja automatycznie wykonuje pełną publikację zamiast ryzykować pozostawienie niespójnej historii.
 
-### `duon_gaz.import_history`
+Ręczne wymuszenie odświeżenia jest dostępne jako usługa:
 
-Opcjonalne narzędzie migracyjne/rozwojowe do importu zweryfikowanej historycznej paczki JSON z `/config`.
+```text
+duon_gaz.refresh_tail
+```
 
-Nie jest wymagane w nowej instalacji.
-
-## Główne encje
-
-W zależności od języka Home Assistanta i nazw encji integracja udostępnia odpowiedniki:
-
-- zużycia gazu,
-- energii gazu,
-- całkowitego kosztu gazu,
-- CO od ostatniego odczytu,
-- CWU od ostatniego odczytu,
-- współczynnika konwersji,
-- zbiorczej diagnostyki korekty Ariston,
-- kalibracji CO,
-- kalibracji CWU,
-- statusu danych,
-- pola wprowadzania stanu gazomierza,
-- przycisku zapisu odczytu gazomierza,
-- przycisku podglądu historii kanonicznej,
-- przycisku publikacji historii kanonicznej.
-
-Sensor **Status danych** udostępnia również diagnostykę historii rozliczonej, bieżącego ogona, publikacji do Recorder i jej weryfikacji.
-
-## Model danych i priorytet źródeł
-
-Zalecana interpretacja jakości danych:
+## Priorytet źródeł danych
 
 1. dokładny ręczny fizyczny odczyt gazomierza,
 2. zaufane wskazanie gazomierza z faktury,
 3. statystyki CO/CWU z Recorder używane jako profil zużycia,
-4. dane rozliczeniowe z faktur do walidacji energii i kosztów,
+4. dane rozliczeniowe z faktur,
 5. bieżące szacunki po najnowszej fizycznej kotwicy.
 
-Kolejny fizyczny odczyt zamienia poprzedni bieżący okres szacowany w przedział rozliczony.
+Kolejny fizyczny odczyt zamienia poprzedni okres szacowany w przedział rozliczony.
 
 ## Bezpieczeństwo danych historycznych
 
 DUON Gaz korzysta z interfejsów Home Assistant Recorder. **Nie zapisuje bezpośrednio do SQL** i nie nadpisuje oryginalnych statystyk CO/CWU.
 
-Historia kanoniczna jest przechowywana pod własnym identyfikatorem statystyki DUON:
+Historia kanoniczna jest przechowywana pod własnym identyfikatorem:
 
 ```text
 duon_gaz:canonical_gas
 ```
 
-## Jeszcze niezaimplementowane
+## Zweryfikowane zachowanie
 
-W wersji 0.3.1 nie są jeszcze ukończone:
+Na instalacji testowej potwierdzono:
+
+- pełną publikację ponad 22 tys. godzin historii,
+- monotoniczną sumę m³,
+- brak ujemnych godzin zużycia,
+- dokładne domknięcie części rozliczonej do fizycznego gazomierza,
+- poprawne scalenie godziny granicznej,
+- przyrostowe odświeżenie tylko bieżącego ogona,
+- automatyczne uruchomienie odświeżenia po zdarzeniu godzinowym Recorder,
+- weryfikację końcowego czasu i sumy przez API Recorder.
+
+Dane liczbowe z instalacji testowej nie są zakodowane w integracji.
+
+## Jeszcze do zrobienia
 
 - automatyczne pobieranie faktur z Outlook/Microsoft Graph,
-- pełny mechanizm pobierania i odszyfrowywania zaszyfrowanych faktur PDF ze skrzynki,
-- automatyczne przygotowanie/wysyłanie SMS,
-- końcowe usunięcie instalacyjnych wartości startowych kalibracji i taryf,
-- automatyczna migracja/zastąpienie konfiguracji Energy Dashboard.
-
-## Stan rozwoju
-
-Aktualne prace nad linią 0.3.x są prowadzone w roboczym PR #1. Obejmują magazyn danych v2, historię źródłową opartą na Recorder, osobną kalibrację CO/CWU, kanoniczną rekonstrukcję historyczną, publikację do zewnętrznej statystyki Recorder i automatyczne odświeżanie bieżącego ogona.
-
-Projekt jest przygotowywany tak, aby nadawał się do ponownego użycia w innych instalacjach z kompatybilnymi skumulowanymi sensorami CO/CWU. Odczyty gazomierza, daty, taryfy i współczynniki kalibracji właściwe dla konkretnej instalacji muszą pozostawać poza ogólnym kodem rekonstrukcji.
+- pełna obsługa zaszyfrowanych faktur PDF,
+- przygotowanie i wysyłanie SMS,
+- finalna migracja konfiguracji Energy Dashboard,
+- scalenie linii 0.3.x do `main` i stabilne wydanie HACS.
