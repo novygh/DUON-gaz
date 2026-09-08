@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import importlib.util
+from pathlib import Path
+import sys
 from types import SimpleNamespace
 import unittest
 from zoneinfo import ZoneInfo
 
-from custom_components.duon_gaz.conversion_audit import (
-    ConversionAuditError,
-    build_conversion_audit,
+MODULE = (
+    Path(__file__).parents[1]
+    / "custom_components"
+    / "duon_gaz"
+    / "conversion_audit.py"
 )
+spec = importlib.util.spec_from_file_location("conversion_audit", MODULE)
+conversion_audit = importlib.util.module_from_spec(spec)
+sys.modules["conversion_audit"] = conversion_audit
+assert spec.loader is not None
+spec.loader.exec_module(conversion_audit)
+
+ConversionAuditError = conversion_audit.ConversionAuditError
+build_conversion_audit = conversion_audit.build_conversion_audit
 
 
 TZ = ZoneInfo("Europe/Warsaw")
