@@ -18,6 +18,8 @@ CONF_OUTLOOK_SENDER = "outlook_sender"
 CONF_OUTLOOK_SUBJECT = "outlook_subject"
 CONF_INVOICE_PDF_PASSWORD = "invoice_pdf_password"
 CONF_OUTLOOK_CHECK_HOUR = "outlook_check_hour"
+CONF_MICROSOFT_CLIENT_ID = "microsoft_client_id"
+CONF_MICROSOFT_TOKEN = "microsoft_token"
 
 DEFAULT_OUTLOOK_SENDER = "efaktura@duondstpl.nazwa.pl"
 DEFAULT_OUTLOOK_SUBJECT = "Duon e-faktura"
