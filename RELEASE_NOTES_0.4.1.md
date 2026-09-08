@@ -39,6 +39,7 @@ Przed wydaniem stabilnym potwierdzono na działającej instalacji, że:
 - okresy bez dwóch dokładnych ręcznych granic są pomijane,
 - znikają sztuczne skoki powodowane przez arbitralne granice czasu odczytu,
 - saldo może rosnąć i maleć zgodnie z kolejnymi odchyleniami,
+- znak salda, różnicy PLN i różnicy procentowej jest liczony konsekwentnie z perspektywy użytkownika,
 - encja nie wpływa na istniejące obliczenia i publikację danych kanonicznych.
 
 ## Zgodność
