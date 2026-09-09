@@ -12,7 +12,7 @@ from homeassistant.util import dt as dt_util
 from .canonical_history import CanonicalHistoryError
 from .canonical_statistics import async_refresh_canonical_tail_statistics
 from .const import (
-    CONF_INVOICE_PDF_PASSWORD,
+    CONF_METER_NUMBER,
     CONF_OUTLOOK_FOLDER,
     CONF_OUTLOOK_SENDER,
     CONF_OUTLOOK_SUBJECT,
@@ -43,9 +43,9 @@ def _processed_message_ids(items: Any) -> set[str]:
 def _pdf_is_encrypted(content: bytes) -> bool:
     """Sprawdź, czy PDF wymaga odszyfrowania przed odczytem.
 
-    Faktury DUON są chronione hasłem. Niezabezpieczone PDF-y dołączane do
-    wiadomości (np. informacje taryfowe) nie są fakturami i mają być
-    ignorowane przez automatyczny importer.
+    Faktury DUON są chronione numerem licznika używanym jako hasło PDF.
+    Niezabezpieczone PDF-y dołączane do wiadomości (np. informacje taryfowe)
+    nie są fakturami i mają być ignorowane przez automatyczny importer.
     """
     try:
         from pypdf import PdfReader
@@ -77,14 +77,14 @@ def _message_audit_record(message: dict[str, Any]) -> dict[str, Any]:
 
 
 def _safe_commit_error(err: Exception) -> str:
-    """Zwróć bezpieczny opis błędu zatwierdzania bez ryzyka ujawnienia sekretów."""
+    """Zwróć bezpieczny opis błędu zatwierdzania bez ryzyka ujawnienia danych."""
     if isinstance(err, (DuonInvoiceParseError, OSError, ValueError, RuntimeError)):
         return str(err)[:500]
     return f"Nieoczekiwany błąd zatwierdzania paczki: {type(err).__name__}"
 
 
 class DuonOutlookSynchronizer:
-    """Pobieraj i importuj nowe faktury z Outlooka bez zapisu sekretów w logach."""
+    """Pobieraj i importuj nowe faktury z Outlooka bez ujawniania danych w logach."""
 
     def __init__(self, runtime, graph: DuonGraphClient, config: dict[str, Any]) -> None:
         self.runtime = runtime
@@ -161,7 +161,7 @@ class DuonOutlookSynchronizer:
         folder_name = str(self.config.get(CONF_OUTLOOK_FOLDER) or "").strip()
         sender = str(self.config.get(CONF_OUTLOOK_SENDER) or "").strip()
         subject = str(self.config.get(CONF_OUTLOOK_SUBJECT) or "").strip()
-        password = str(self.config.get(CONF_INVOICE_PDF_PASSWORD) or "")
+        meter_number = str(self.config.get(CONF_METER_NUMBER) or "").strip()
 
         if not folder_name:
             raise ValueError("Nie skonfigurowano folderu Outlook dla faktur DUON.")
@@ -169,8 +169,8 @@ class DuonOutlookSynchronizer:
             raise ValueError("Nie skonfigurowano nadawcy faktur DUON.")
         if not subject:
             raise ValueError("Nie skonfigurowano tematu wiadomości z fakturą DUON.")
-        if not password:
-            raise ValueError("Nie skonfigurowano hasła do faktur PDF DUON.")
+        if not meter_number:
+            raise ValueError("Nie skonfigurowano numeru licznika DUON.")
 
         started_at = dt_util.utcnow().isoformat()
 
@@ -272,7 +272,7 @@ class DuonOutlookSynchronizer:
                     invoice = await self.runtime.hass.async_add_executor_job(
                         parse_invoice_pdf_bytes,
                         attachment.content,
-                        password,
+                        meter_number,
                     )
                 except (DuonInvoiceParseError, OSError, ValueError) as err:
                     return await self._block_import(
