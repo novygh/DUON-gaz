@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 import sys
@@ -24,7 +25,7 @@ build_sms_body = MODULE.build_sms_body
 build_sms_intent_data = MODULE.build_sms_intent_data
 matching_android_registrations = MODULE.matching_android_registrations
 normalize_meter_number = MODULE.normalize_meter_number
-pending_value_already_saved = MODULE.pending_value_already_saved
+recent_same_reading_for_sms_retry = MODULE.recent_same_reading_for_sms_retry
 submitted_meter_value = MODULE.submitted_meter_value
 
 
@@ -64,46 +65,40 @@ class TestSmsRules(unittest.TestCase):
             [registrations[0]],
         )
 
-    def test_ponowienie_bez_ponownego_wpisania_nie_tworzy_kotwicy(self) -> None:
+    def test_ten_sam_odczyt_w_ciagu_5_minut_jest_retry_sms(self) -> None:
         last = {
             "timestamp": "2026-09-09T09:28:10+00:00",
             "meter_m3": 1807.25,
             "meter_m3_exact": 1807.25,
         }
-        self.assertTrue(
-            pending_value_already_saved(
-                1807.25,
-                "2026-09-09T09:27:55+00:00",
-                last,
-            )
-        )
+        now = datetime(2026, 9, 9, 9, 28, 28, tzinfo=timezone.utc)
+        self.assertTrue(recent_same_reading_for_sms_retry(1807.25, now, last))
 
-    def test_ponowne_wpisanie_tego_samego_stanu_pozwala_na_nowa_kotwice(self) -> None:
+    def test_ten_sam_odczyt_po_5_minutach_jest_nowa_kotwica(self) -> None:
         last = {
             "timestamp": "2026-09-09T09:28:10+00:00",
             "meter_m3": 1807.25,
             "meter_m3_exact": 1807.25,
         }
-        self.assertFalse(
-            pending_value_already_saved(
-                1807.25,
-                "2026-09-09T09:29:00+00:00",
-                last,
-            )
-        )
+        now = datetime(2026, 9, 9, 9, 34, 0, tzinfo=timezone.utc)
+        self.assertFalse(recent_same_reading_for_sms_retry(1807.25, now, last))
+
+    def test_ten_sam_odczyt_nastepnego_dnia_jest_nowa_kotwica(self) -> None:
+        last = {
+            "timestamp": "2026-09-09T09:28:10+00:00",
+            "meter_m3": 1807.25,
+            "meter_m3_exact": 1807.25,
+        }
+        now = datetime(2026, 9, 10, 9, 28, 10, tzinfo=timezone.utc)
+        self.assertFalse(recent_same_reading_for_sms_retry(1807.25, now, last))
 
     def test_inna_wartosc_zawsze_jest_nowa_kotwica(self) -> None:
         last = {
             "timestamp": "2026-09-09T09:28:10+00:00",
             "meter_m3": 1807.25,
         }
-        self.assertFalse(
-            pending_value_already_saved(
-                1807.26,
-                "2026-09-09T09:27:55+00:00",
-                last,
-            )
-        )
+        now = datetime(2026, 9, 9, 9, 28, 28, tzinfo=timezone.utc)
+        self.assertFalse(recent_same_reading_for_sms_retry(1807.26, now, last))
 
 
 if __name__ == "__main__":
