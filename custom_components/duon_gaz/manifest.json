@@ -6,6 +6,7 @@
   "config_flow": true,
   "single_config_entry": true,
   "dependencies": ["recorder"],
+  "after_dependencies": ["mobile_app"],
   "requirements": ["pypdf==6.18.0"],
   "iot_class": "cloud_polling"
 }
