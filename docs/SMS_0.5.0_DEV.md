@@ -42,6 +42,14 @@ intent_extras = sms_body:<zakodowana treść>:String.urlencoded
 
 Pierwsze użycie `command_activity` może wymagać zezwolenia aplikacji Home Assistant na wyświetlanie nad innymi aplikacjami.
 
+### Ponowienie po ekranie uprawnienia
+
+Żądanie `command_activity` może zostać przyjęte przez Home Assistanta, mimo że Android zamiast edytora SMS pokaże najpierw ekran nadania uprawnienia „wyświetlanie nad innymi aplikacjami”. Użytkownik może wtedy ponownie nacisnąć **Zapisz i wyślij SMS**.
+
+Ponowne kliknięcie bez ponownego wpisania wartości nie zapisuje drugiej kotwicy. Integracja rozpoznaje, że bieżąca wartość pola `number` została już zapisana po czasie jej ostatniego wpisania, i jedynie ponawia otwarcie edytora SMS.
+
+Jeżeli użytkownik świadomie ponownie wpisze nawet tę samą wartość, `pending_entered_at` zostaje odświeżone i nowa rzeczywista kotwica może zostać zapisana.
+
 ## Numer licznika
 
 Od 0.5.0 konfiguracja Outlook/PDF używa jednego jawnego pola:
@@ -82,6 +90,22 @@ Reguły niezależne od runtime Home Assistanta mają testy jednostkowe obejmują
 - odrzucenie niecyfrowego numeru,
 - format treści SMS,
 - parametry intentu Android,
-- wybór wyłącznie urządzenia Android właściwego użytkownika.
+- wybór wyłącznie urządzenia Android właściwego użytkownika,
+- ponowienie SMS bez duplikowania już zapisanej wartości,
+- świadome ponowne wpisanie tej samej wartości jako nowej kotwicy.
 
-Przed stabilnym 0.5.0 wymagana jest walidacja na działającej instalacji: rekonfiguracja numeru licznika, odszyfrowanie faktury oraz otwarcie przygotowanego SMS na telefonie użytkownika naciskającego przycisk.
+## Walidacja na działającej instalacji
+
+Potwierdzono:
+
+- rekonfigurację jawnego numeru licznika,
+- ponowne uwierzytelnienie Outlook po rekonfiguracji,
+- jednoznaczne przypisanie Android Mobile App do użytkownika,
+- zapis rzeczywistej ręcznej kotwicy,
+- domknięcie bieżącej estymacji do fizycznego gazomierza,
+- przeliczenie kalibracji po nowej kotwicy,
+- poprawne zaokrąglenie stanu do pełnych m³,
+- otwarcie właściwego wątku SMS na telefonie użytkownika,
+- przygotowanie poprawnej treści bez automatycznego wysłania.
+
+Pierwszy test ujawnił, że ponowienie przycisku po ekranie nadania uprawnienia Android tworzyło drugą kotwicę o tej samej wartości. Błąd został poprawiony przez idempotentne ponawianie SMS opisane wyżej.
