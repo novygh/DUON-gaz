@@ -19,7 +19,7 @@ import_history:
 
 import_invoice:
   name: Importuj fakturę PDF
-  description: Odczytuje zaszyfrowaną fakturę DUON z katalogu /config, zapisuje dane rozliczeniowe i w razie potrzeby aktualizuje historię kanoniczną.
+  description: Odczytuje zaszyfrowaną fakturę DUON z katalogu /config, używając skonfigurowanego numeru licznika jako hasła PDF, zapisuje dane rozliczeniowe i w razie potrzeby aktualizuje historię kanoniczną.
   fields:
     path:
       name: Plik PDF
@@ -27,13 +27,6 @@ import_invoice:
       required: true
       selector:
         text:
-    password:
-      name: Hasło do PDF
-      description: Opcjonalne. Po skonfigurowaniu automatyzacji Outlook używane jest zapisane hasło do faktur.
-      required: false
-      selector:
-        text:
-          type: password
     source_message_id:
       name: Identyfikator wiadomości
       description: Opcjonalny identyfikator wiadomości źródłowej do audytu.
@@ -43,7 +36,7 @@ import_invoice:
 
 sync_outlook:
   name: Sprawdź Outlook teraz
-  description: Sprawdza skonfigurowany folder Outlook, pobiera nowe faktury DUON, odszyfrowuje je zapisanym hasłem i importuje bez ponownego pytania o hasło.
+  description: Sprawdza skonfigurowany folder Outlook, pobiera nowe faktury DUON, odszyfrowuje je numerem licznika i importuje bez ponownego pytania o dane.
 
 refresh_tail:
   name: Odśwież bieżący ogon
