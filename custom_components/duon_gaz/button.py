@@ -20,6 +20,7 @@ from .sms_rules import (
     build_sms_body,
     build_sms_intent_data,
     matching_android_registrations,
+    pending_value_already_saved,
     submitted_meter_value,
 )
 
@@ -146,14 +147,28 @@ class DuonConfirmMeterButton(ButtonEntity):
 
         registration = self._target_mobile_registration(target_user_id)
 
-        try:
-            await self.runtime.async_confirm_meter()
-        except ValueError as err:
-            raise HomeAssistantError(str(err)) from err
+        manual_readings = self.runtime._manual_readings()
+        last_manual = manual_readings[-1] if manual_readings else None
+        already_saved = pending_value_already_saved(
+            float(exact),
+            self.runtime.data.get("pending_entered_at"),
+            last_manual,
+        )
 
-        reading = self.runtime._last_reading()
-        if reading is None:
-            raise HomeAssistantError("Odczyt został zapisany, ale nie można odnaleźć jego rekordu.")
+        if already_saved:
+            reading = last_manual
+        else:
+            try:
+                await self.runtime.async_confirm_meter()
+            except ValueError as err:
+                raise HomeAssistantError(str(err)) from err
+
+            manual_readings = self.runtime._manual_readings()
+            reading = manual_readings[-1] if manual_readings else None
+            if reading is None:
+                raise HomeAssistantError(
+                    "Odczyt został zapisany, ale nie można odnaleźć jego rekordu."
+                )
 
         reading["meter_m3_exact"] = float(exact)
         reading["meter_m3_submitted"] = submitted_meter_value(float(exact))
@@ -164,6 +179,7 @@ class DuonConfirmMeterButton(ButtonEntity):
             "meter_m3": reading["meter_m3_submitted"],
             "target_user_id": target_user_id,
             "prepared_at": dt_util.utcnow().isoformat(),
+            "anchor_reused": already_saved,
         }
         await self.runtime.async_save()
         self.runtime.async_notify()
