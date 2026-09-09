@@ -2,10 +2,10 @@
 
 Dokument jest technicznym punktem odniesienia dla dalszych prac nad integracją. Opisuje aktualną architekturę i decyzje obowiązujące w stabilnym wydaniu **0.4.2** na gałęzi `main`.
 
-Aktualny etap: **0.4.2 — historia kanoniczna gazu, rozdział CO/CWU, koszty fakturowe, audyt współczynnika konwersji i historyczny wykres audytu w Recorderze**.
+Aktualny etap: **0.4.2 — historia kanoniczna gazu, rozdział CO/CWU, koszty fakturowe, audyt współczynnika konwersji, historyczny wykres audytu w Recorderze oraz zweryfikowana integracja z Energy Dashboard**.
 
 > [!IMPORTANT]
-> Starsze odniesienia do gałęzi `feature/store-v2-recorder-sums`, PR #1 i etapu 0.3.4 są historyczne. Stabilnym punktem bazowym dalszego rozwoju jest obecnie `main` w wersji 0.4.2. Dokumentacja wydań pozostaje rozdzielona w `RELEASE_NOTES_0.3.4.md`, `RELEASE_NOTES_0.4.0.md`, `RELEASE_NOTES_0.4.1.md` i `RELEASE_NOTES_0.4.2.md`.
+> Starsze odniesienia do gałęzi `feature/store-v2-recorder-sums`, PR #1 i etapu 0.3.4 są historyczne. PR #1 został zamknięty jako zastąpiony przez stabilne wydania na `main`. Stabilnym punktem bazowym dalszego rozwoju jest obecnie `main` w wersji 0.4.2. Dokumentacja wydań pozostaje rozdzielona w `RELEASE_NOTES_0.3.4.md`, `RELEASE_NOTES_0.4.0.md`, `RELEASE_NOTES_0.4.1.md` i `RELEASE_NOTES_0.4.2.md`.
 
 ## Niezmienne zasady architektury
 
@@ -169,15 +169,17 @@ Po ostatnim zamkniętym okresie fakturowym koszt jest szacowany z bieżącej kon
 
 ## Energy Dashboard
 
-Docelowy rozdzielony model źródeł gazu jest następujący:
+Zweryfikowany rozdzielony model źródeł gazu jest następujący:
 
 - CO: `duon_gaz:canonical_heating` + `duon_gaz:canonical_heating_cost`,
 - CWU: `duon_gaz:canonical_dhw` + `duon_gaz:canonical_dhw_cost`,
 - koszty stałe: `duon_gaz:canonical_fixed_cost_gas` + `duon_gaz:canonical_fixed_cost`.
 
+`duon_gaz:canonical_fixed_cost_gas` pozostaje zerowym nośnikiem objętości; koszt stały jest pobierany niezależnie z `duon_gaz:canonical_fixed_cost`.
+
 `duon_gaz:canonical_gas` pozostaje statystyką całkowitą i audytową. Nie należy dodawać jej równolegle jako kolejnego źródła gazu, jeżeli Energy Dashboard korzysta już z rozdziału CO/CWU, ponieważ spowodowałoby to podwójne liczenie zużycia.
 
-Warstwa danych potrzebna do Energy Dashboard jest gotowa i zweryfikowana. Finalna konfiguracja samego Dashboardu na działającej instalacji pozostaje osobnym etapem operacyjnym.
+Finalna konfiguracja Dashboardu została uruchomiona i zweryfikowana na działającej instalacji. Potwierdzono poprawne rozdzielenie CO/CWU, prawidłowe naliczanie kosztu stałego przy `0 m³` nośnika, zgodność sumy kosztów z warstwą kanoniczną oraz brak podwójnego liczenia całkowitego gazu. Po migracji usunięto stary równoległy tor helperów i jego osierocone statystyki.
 
 ## Audyt współczynnika konwersji — od 0.4.1
 
@@ -267,7 +269,11 @@ Potwierdzono między innymi:
 - działanie przyrostowego odświeżania prowizorycznego ogona,
 - audyt współczynnika konwersji oparty na dokładnych ręcznych granicach,
 - poprawną konwencję znaku audytu z perspektywy użytkownika,
-- historyczny wykres audytu z rzeczywistymi punktami zamiast wartości z testowych wersji developerskich.
+- historyczny wykres audytu z rzeczywistymi punktami zamiast wartości z testowych wersji developerskich,
+- finalną konfigurację Energy Dashboard z trzema źródłami gazu i kosztów,
+- prawidłowy koszt stały przy zerowym nośniku `canonical_fixed_cost_gas`,
+- zgodność toru Energy z historią kanoniczną, fizycznymi kotwicami gazomierza i kosztami fakturowymi,
+- usunięcie starego równoległego toru helperów, countera, automatyzacji kosztu stałego i osieroconych statystyk po migracji.
 
 ## Historia wydań będących punktami architektonicznymi
 
@@ -278,10 +284,9 @@ Potwierdzono między innymi:
 
 ## Dalszy rozwój
 
-Najbliższe osobne etapy po 0.4.2:
+Najbliższy osobny etap po 0.4.2:
 
-1. finalna konfiguracja i kontrola Energy Dashboard na działającej instalacji,
-2. SMS jako osobna funkcja, bez mieszania jej z warstwą kanoniczną i rozliczeniową.
+1. SMS jako osobna funkcja, bez mieszania jej z warstwą kanoniczną i rozliczeniową.
 
 Nowe prace powinny wychodzić z aktualnego `main` na osobnych gałęziach i przechodzić przez CI przed scaleniem.
 
