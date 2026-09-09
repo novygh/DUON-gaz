@@ -24,6 +24,7 @@ build_sms_body = MODULE.build_sms_body
 build_sms_intent_data = MODULE.build_sms_intent_data
 matching_android_registrations = MODULE.matching_android_registrations
 normalize_meter_number = MODULE.normalize_meter_number
+pending_value_already_saved = MODULE.pending_value_already_saved
 submitted_meter_value = MODULE.submitted_meter_value
 
 
@@ -40,15 +41,15 @@ class TestSmsRules(unittest.TestCase):
             normalize_meter_number("12A34")
 
     def test_tresc_sms_ma_format_stan_spacja_numer(self) -> None:
-        self.assertEqual(build_sms_body(1803.214, "917474"), "1803 917474")
+        self.assertEqual(build_sms_body(1803.214, "123456"), "1803 123456")
 
     def test_intent_otwiera_systemowy_edytor_sms_z_trescia(self) -> None:
-        data = build_sms_intent_data("1803 917474", recipient="661000860")
+        data = build_sms_intent_data("1803 123456", recipient="661000860")
         self.assertEqual(data["intent_action"], "android.intent.action.SENDTO")
         self.assertEqual(data["intent_uri"], "smsto:661000860")
         self.assertEqual(
             data["intent_extras"],
-            "sms_body:1803%20917474:String.urlencoded",
+            "sms_body:1803%20123456:String.urlencoded",
         )
 
     def test_wybierany_jest_tylko_android_biezacego_uzytkownika(self) -> None:
@@ -61,6 +62,47 @@ class TestSmsRules(unittest.TestCase):
         self.assertEqual(
             matching_android_registrations(registrations, "u1"),
             [registrations[0]],
+        )
+
+    def test_ponowienie_bez_ponownego_wpisania_nie_tworzy_kotwicy(self) -> None:
+        last = {
+            "timestamp": "2026-09-09T09:28:10+00:00",
+            "meter_m3": 1807.25,
+            "meter_m3_exact": 1807.25,
+        }
+        self.assertTrue(
+            pending_value_already_saved(
+                1807.25,
+                "2026-09-09T09:27:55+00:00",
+                last,
+            )
+        )
+
+    def test_ponowne_wpisanie_tego_samego_stanu_pozwala_na_nowa_kotwice(self) -> None:
+        last = {
+            "timestamp": "2026-09-09T09:28:10+00:00",
+            "meter_m3": 1807.25,
+            "meter_m3_exact": 1807.25,
+        }
+        self.assertFalse(
+            pending_value_already_saved(
+                1807.25,
+                "2026-09-09T09:29:00+00:00",
+                last,
+            )
+        )
+
+    def test_inna_wartosc_zawsze_jest_nowa_kotwica(self) -> None:
+        last = {
+            "timestamp": "2026-09-09T09:28:10+00:00",
+            "meter_m3": 1807.25,
+        }
+        self.assertFalse(
+            pending_value_already_saved(
+                1807.26,
+                "2026-09-09T09:27:55+00:00",
+                last,
+            )
         )
 
 
