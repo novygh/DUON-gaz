@@ -1,4 +1,4 @@
-# SMS z odczytem — 0.5.0-dev.1
+# SMS z odczytem — 0.5.0-dev.3
 
 Dokument opisuje funkcję rozwijaną na gałęzi `feature/sms-compose`. Stabilnym wydaniem pozostaje 0.4.2 do czasu walidacji funkcji na działającej instalacji.
 
@@ -20,13 +20,7 @@ Integracja nie wysyła SMS samodzielnie i nie wymaga uprawnienia Android do cich
 
 Pierwszeństwo ma `context.user_id` osoby naciskającej przycisk. Jeżeli kontekst przycisku nie zawiera użytkownika, awaryjnie używany jest identyfikator użytkownika zapisany przy ręcznym wpisaniu stanu gazomierza.
 
-Rejestracje `mobile_app` są filtrowane jednocześnie po:
-
-- dokładnym `user_id`,
-- systemie `Android`,
-- obecności `webhook_id`.
-
-Brak dopasowania albo więcej niż jedno urządzenie Android dla tego samego użytkownika powoduje zatrzymanie operacji przed zapisaniem nowego odczytu. Integracja nie wybiera telefonu losowo.
+Rejestracje `mobile_app` są filtrowane jednocześnie po dokładnym `user_id`, systemie `Android` i obecności `webhook_id`. Brak dopasowania albo więcej niż jedno urządzenie Android dla tego samego użytkownika powoduje zatrzymanie operacji przed zapisaniem nowego odczytu. Integracja nie wybiera telefonu losowo.
 
 Po wybraniu rejestracji używana jest usługa powiadomień Mobile App odpowiadająca dokładnie jej `webhook_id`. Dzięki temu polecenie nie jest rozsyłane do innych telefonów.
 
@@ -46,32 +40,19 @@ Pierwsze użycie `command_activity` może wymagać zezwolenia aplikacji Home Ass
 
 Żądanie `command_activity` może zostać przyjęte przez Home Assistanta, mimo że Android zamiast edytora SMS pokaże najpierw ekran nadania uprawnienia „wyświetlanie nad innymi aplikacjami”. Użytkownik może wtedy ponownie nacisnąć **Zapisz i wyślij SMS**.
 
-Ponowne kliknięcie bez ponownego wpisania wartości nie zapisuje drugiej kotwicy. Integracja rozpoznaje, że bieżąca wartość pola `number` została już zapisana po czasie jej ostatniego wpisania, i jedynie ponawia otwarcie edytora SMS.
+Aby taki retry nie tworzył drugiej kotwicy, integracja deduplikuje wyłącznie **identyczny odczyt zapisany w ciągu ostatnich 5 minut**. W tym krótkim oknie ponowne kliknięcie tylko ponawia otwarcie edytora SMS.
 
-Jeżeli użytkownik świadomie ponownie wpisze nawet tę samą wartość, `pending_entered_at` zostaje odświeżone i nowa rzeczywista kotwica może zostać zapisana.
+Po upływie 5 minut kolejne kliknięcie jest traktowane jako nowy rzeczywisty odczyt i może utworzyć nową kotwicę również wtedy, gdy stan licznika się nie zmienił i użytkownik nie edytował pola. To ważne, ponieważ niezmieniony fizyczny licznik w późniejszym czasie nadal jest wartościową informacją ograniczającą model.
 
 ## Numer licznika
 
-Od 0.5.0 konfiguracja Outlook/PDF używa jednego jawnego pola:
+Od 0.5.0 konfiguracja Outlook/PDF używa jednego jawnego pola `meter_number`. Numer licznika jest przechowywany jako tekst, aby zachować ewentualne zera wiodące, i musi składać się wyłącznie z cyfr.
 
-```text
-meter_number
-```
-
-Numer licznika jest przechowywany jako tekst, aby zachować ewentualne zera wiodące, i musi składać się wyłącznie z cyfr.
-
-Ta sama wartość jest używana:
-
-- jako hasło do zaszyfrowanych faktur PDF DUON,
-- jako drugi człon treści SMS z odczytem.
-
-Publiczny kod i dokumentacja nie zawierają numeru konkretnej instalacji.
+Ta sama wartość jest używana jako hasło do zaszyfrowanych faktur PDF DUON oraz jako drugi człon treści SMS z odczytem. Publiczny kod i dokumentacja nie zawierają numeru konkretnej instalacji.
 
 ## Przejście z 0.4.2
 
-Nie ma automatycznej migracji starego pola `invoice_pdf_password` do `meter_number`.
-
-Po instalacji 0.5.0 użytkownik wykonuje **Przekonfiguruj**, jawnie wpisuje numer licznika i kończy konfigurację Outlook. Po poprawnym zapisaniu stare pole `invoice_pdf_password` jest usuwane z wpisu konfiguracji.
+Nie ma automatycznej migracji starego pola `invoice_pdf_password` do `meter_number`. Po instalacji 0.5.0 użytkownik wykonuje **Przekonfiguruj**, jawnie wpisuje numer licznika i kończy konfigurację Outlook. Po poprawnym zapisaniu stare pole `invoice_pdf_password` jest usuwane z wpisu konfiguracji.
 
 Do czasu wykonania tej rekonfiguracji automatyczna synchronizacja Outlook nie jest uruchamiana, a przycisk SMS zgłasza brak numeru licznika zamiast zgadywać lub używać starej wartości.
 
@@ -83,29 +64,10 @@ Jeżeli zapis odczytu powiedzie się, ale otwarcie aplikacji SMS nie powiedzie s
 
 ## Testy
 
-Reguły niezależne od runtime Home Assistanta mają testy jednostkowe obejmujące:
-
-- zaokrąglenie stanu do pełnych m³,
-- zachowanie zer wiodących numeru licznika,
-- odrzucenie niecyfrowego numeru,
-- format treści SMS,
-- parametry intentu Android,
-- wybór wyłącznie urządzenia Android właściwego użytkownika,
-- ponowienie SMS bez duplikowania już zapisanej wartości,
-- świadome ponowne wpisanie tej samej wartości jako nowej kotwicy.
+Reguły niezależne od runtime Home Assistanta mają testy jednostkowe obejmujące zaokrąglenie stanu do pełnych m³, zachowanie zer wiodących numeru licznika, odrzucenie niecyfrowego numeru, format treści SMS, parametry intentu Android, wybór właściwego Androida, retry tej samej wartości w krótkim oknie bez duplikatu oraz utworzenie nowej kotwicy dla tej samej wartości po upływie okna.
 
 ## Walidacja na działającej instalacji
 
-Potwierdzono:
+Potwierdzono rekonfigurację jawnego numeru licznika, ponowne uwierzytelnienie Outlook, jednoznaczne przypisanie Android Mobile App do użytkownika, zapis rzeczywistej ręcznej kotwicy, domknięcie bieżącej estymacji do fizycznego gazomierza, przeliczenie kalibracji po nowej kotwicy, poprawne zaokrąglenie stanu do pełnych m³, otwarcie właściwego wątku SMS na telefonie użytkownika oraz przygotowanie poprawnej treści bez automatycznego wysłania.
 
-- rekonfigurację jawnego numeru licznika,
-- ponowne uwierzytelnienie Outlook po rekonfiguracji,
-- jednoznaczne przypisanie Android Mobile App do użytkownika,
-- zapis rzeczywistej ręcznej kotwicy,
-- domknięcie bieżącej estymacji do fizycznego gazomierza,
-- przeliczenie kalibracji po nowej kotwicy,
-- poprawne zaokrąglenie stanu do pełnych m³,
-- otwarcie właściwego wątku SMS na telefonie użytkownika,
-- przygotowanie poprawnej treści bez automatycznego wysłania.
-
-Pierwszy test ujawnił, że ponowienie przycisku po ekranie nadania uprawnienia Android tworzyło drugą kotwicę o tej samej wartości. Błąd został poprawiony przez idempotentne ponawianie SMS opisane wyżej.
+Pierwszy test ujawnił duplikowanie kotwicy przy ponownym kliknięciu po ekranie uprawnienia Android. W 0.5.0-dev.2 deduplikacja była związana z ponowną edycją pola Number, co okazało się zbyt szerokie: późniejsze kliknięcie z niezmienionym fizycznym stanem również powinno utworzyć nową kotwicę. W 0.5.0-dev.3 deduplikacja została ograniczona do 5-minutowego okna retry.
