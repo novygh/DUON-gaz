@@ -20,7 +20,7 @@ from .canonical_statistics import (
     forget_publication_lock,
 )
 from .const import (
-    CONF_INVOICE_PDF_PASSWORD,
+    CONF_METER_NUMBER,
     CONF_MICROSOFT_CLIENT_ID,
     CONF_MICROSOFT_TOKEN,
     CONF_OUTLOOK_CHECK_HOUR,
@@ -62,7 +62,6 @@ _IMPORT_HISTORY_SCHEMA = vol.Schema(
 _IMPORT_INVOICE_SCHEMA = vol.Schema(
     {
         vol.Required("path"): cv.string,
-        vol.Optional("password"): cv.string,
         vol.Optional("source_message_id"): cv.string,
     }
 )
@@ -91,7 +90,7 @@ def _outlook_is_configured(entry: ConfigEntry) -> bool:
         and entry.data.get(CONF_OUTLOOK_FOLDER)
         and entry.data.get(CONF_OUTLOOK_SENDER)
         and entry.data.get(CONF_OUTLOOK_SUBJECT)
-        and entry.data.get(CONF_INVOICE_PDF_PASSWORD)
+        and entry.data.get(CONF_METER_NUMBER)
     )
 
 
@@ -122,14 +121,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DuonGazConfigEntry) -> b
             raise HomeAssistantError(str(err)) from err
 
     async def _handle_import_invoice(call: ServiceCall) -> None:
-        password = str(
-            call.data.get("password")
-            or entry.data.get(CONF_INVOICE_PDF_PASSWORD)
-            or ""
-        )
-        if not password:
+        meter_number = str(entry.data.get(CONF_METER_NUMBER) or "").strip()
+        if not meter_number:
             raise HomeAssistantError(
-                "Brak hasła do PDF. Skonfiguruj Outlook albo podaj hasło w wywołaniu usługi."
+                "Brak numeru licznika DUON. Użyj Przekonfiguruj i podaj numer licznika."
             )
 
         try:
@@ -137,7 +132,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DuonGazConfigEntry) -> b
             invoice = await hass.async_add_executor_job(
                 parse_invoice_pdf,
                 path,
-                password,
+                meter_number,
             )
             result = await async_import_invoice(
                 runtime,
