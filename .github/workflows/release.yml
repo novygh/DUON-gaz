@@ -1,0 +1,85 @@
+name: Publikacja wydania DUON Gaz
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - custom_components/duon_gaz/manifest.json
+      - RELEASE_NOTES_*.md
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v5
+
+      - name: Odczytaj wersję
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path('custom_components/duon_gaz/manifest.json').read_text())['version'])
+          PY
+          )"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Sprawdź stabilną wersję i release notes
+        id: preflight
+        shell: bash
+        run: |
+          VERSION='${{ steps.version.outputs.version }}'
+          NOTES="RELEASE_NOTES_${VERSION}.md"
+
+          if [[ "$VERSION" == *-* ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Wersja developerska: $VERSION — pomijam publikację."
+            exit 0
+          fi
+
+          if [[ ! -f "$NOTES" ]]; then
+            echo "Brak $NOTES" >&2
+            exit 1
+          fi
+
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+      - name: Sprawdź, czy wydanie już istnieje
+        if: steps.preflight.outputs.publish == 'true'
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG='${{ steps.version.outputs.tag }}'
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Wydanie $TAG już istnieje — bez zmian."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Utwórz tag i GitHub Release
+        if: steps.preflight.outputs.publish == 'true' && steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION='${{ steps.version.outputs.version }}'
+          TAG='${{ steps.version.outputs.tag }}'
+          NOTES='${{ steps.preflight.outputs.notes }}'
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "DUON Gaz $VERSION" \
+            --notes-file "$NOTES"
