@@ -1,11 +1,11 @@
 # Status rozwoju DUON Gaz
 
-Dokument jest technicznym punktem odniesienia dla dalszych prac nad integracją. Opisuje aktualną architekturę i decyzje obowiązujące w stabilnym wydaniu **0.4.2** na gałęzi `main`.
+Dokument jest technicznym punktem odniesienia dla dalszych prac nad integracją. Opisuje architekturę i decyzje obowiązujące w stabilnym wydaniu **0.5.0**.
 
-Aktualny etap: **0.4.2 — historia kanoniczna gazu, rozdział CO/CWU, koszty fakturowe, audyt współczynnika konwersji, historyczny wykres audytu w Recorderze oraz zweryfikowana integracja z Energy Dashboard**.
+Aktualny etap: **0.5.0 — stabilna historia kanoniczna gazu, rozdział CO/CWU, koszty fakturowe, audyt współczynnika konwersji, Energy Dashboard, automatyczny Outlook oraz przygotowanie SMS z ręcznym odczytem gazomierza**.
 
 > [!IMPORTANT]
-> Starsze odniesienia do gałęzi `feature/store-v2-recorder-sums`, PR #1 i etapu 0.3.4 są historyczne. PR #1 został zamknięty jako zastąpiony przez stabilne wydania na `main`. Stabilnym punktem bazowym dalszego rozwoju jest obecnie `main` w wersji 0.4.2. Dokumentacja wydań pozostaje rozdzielona w `RELEASE_NOTES_0.3.4.md`, `RELEASE_NOTES_0.4.0.md`, `RELEASE_NOTES_0.4.1.md` i `RELEASE_NOTES_0.4.2.md`.
+> Stabilnym punktem bazowym dalszego rozwoju jest `main` w wersji 0.5.0. Starsze PR-y i gałęzie developerskie mają znaczenie wyłącznie historyczne. Dokumentacja wydań pozostaje rozdzielona w `RELEASE_NOTES_0.3.4.md`, `RELEASE_NOTES_0.4.0.md`, `RELEASE_NOTES_0.4.1.md`, `RELEASE_NOTES_0.4.2.md` i `RELEASE_NOTES_0.5.0.md`.
 
 ## Niezmienne zasady architektury
 
@@ -17,85 +17,79 @@ DUON Gaz rozdziela źródła danych i nie miesza ich ról:
 4. **dane rozliczeniowe z faktur** — okresy, współczynnik konwersji, stawki, VAT i kwoty brutto,
 5. **bieżąca konfiguracja taryfowa** — wyłącznie do prowizorycznej wyceny okresu po ostatniej zamkniętej fakturze.
 
-Surowe statystyki źródłowe CO/CWU są traktowane jako dane wejściowe i **nigdy nie są modyfikowane**. Integracja nie zapisuje bezpośrednio do SQL. Publikacja korzysta z publicznych mechanizmów Home Assistant Recorder.
+Surowe statystyki źródłowe CO/CWU są danymi wejściowymi i **nigdy nie są modyfikowane**. Integracja nie zapisuje bezpośrednio do SQL. Publikacja korzysta z publicznych mechanizmów Home Assistant Recorder.
 
 ## Historia kanoniczna gazu
 
-Podstawową statystyką audytową całego zużycia pozostaje:
+Podstawowa statystyka audytowa całego zużycia:
 
 ```text
 duon_gaz:canonical_gas
 ```
 
-Z tej samej historii wyprowadzane są osobne statystyki przeznaczone do rozdzielenia zużycia:
+Rozdzielone statystyki zużycia:
 
 ```text
 duon_gaz:canonical_heating
 duon_gaz:canonical_dhw
 ```
 
-Algorytm historii:
+Algorytm:
 
 - waliduje kotwice i ich monotoniczność,
-- wylicza przyrosty CO i CWU ze skumulowanych statystyk `sum`,
-- obsługuje korekty i rollbacki źródła przez wycofanie wcześniejszego nadmiaru zamiast tworzenia ujemnego zużycia,
+- wylicza przyrosty CO/CWU ze skumulowanych statystyk `sum`,
+- obsługuje rollbacki przez wycofanie wcześniejszego nadmiaru zamiast tworzenia ujemnego zużycia,
 - rekonstruuje brakujące godziny z lokalnego profilu historycznego,
 - przelicza CO i CWU osobnymi współczynnikami m³/kWh,
 - domyka każdy rozliczony przedział dokładnie do fizycznej różnicy gazomierza,
 - zachowuje rozdział CO/CWU,
 - buduje prowizoryczny ogon po ostatniej fizycznej kotwicy,
 - scala część rozliczoną i ogon w jedną spójną serię,
-- odświeża ogon po pojawieniu się nowych godzinowych statystyk Recorder,
-- wykonuje pełny rebuild, gdy zmieni się zestaw aktywnych kotwic, źródła CO/CWU, kalibracja, dane fakturowe albo konfiguracja kosztowa.
+- odświeża ogon po nowych godzinowych statystykach Recorder,
+- wykonuje pełny rebuild po zmianie aktywnych kotwic, źródeł CO/CWU, kalibracji, faktur lub konfiguracji kosztowej.
 
-Publikacja defensywnie sprawdza zgodność:
+Publikacja defensywnie wymaga:
 
 ```text
 CO + CWU = canonical_gas
 ```
 
-Jeżeli gazu nie można jednoznacznie przypisać do CO lub CWU, publikacja rozdzielonej historii jest blokowana zamiast zgadywać.
+Nieprzypisany gaz blokuje publikację rozdzielonej historii zamiast uruchamiać heurystykę.
 
 ### Fingerprint aktywnych kotwic
 
-Publikacja przechowuje odcisk całego aktywnego zestawu kotwic. Dodanie, usunięcie lub zmiana kotwicy wewnątrz już rozliczonej historii wymusza pełną przebudowę, nawet jeżeli ostatnia kotwica i współczynniki kalibracji nie zmieniły się.
+Publikacja przechowuje odcisk całego aktywnego zestawu kotwic. Dodanie, usunięcie lub zmiana kotwicy wewnątrz istniejącej historii wymusza pełną przebudowę nawet wtedy, gdy ostatnia kotwica i współczynniki kalibracji pozostają bez zmian.
 
 ## Kalibracja CO/CWU
 
-Kalibracja jest lokalna dla instalacji i nie zawiera publicznie zakodowanych wartości konkretnego kotła lub domu.
+Kalibracja jest lokalna dla instalacji. Po zgromadzeniu wystarczającej liczby zaufanych przedziałów integracja wyznacza osobne współczynniki CO i CWU metodą odpornej regresji dwóch składowych.
 
-Po zgromadzeniu wystarczającej liczby zaufanych przedziałów integracja wyznacza osobne współczynniki CO i CWU metodą odpornej regresji dwóch składowych.
+Reguły kotwic fakturowych:
 
-### Reguły dla kotwic fakturowych
-
-Odczyt na fakturze ma zwykle dokładność dnia, a nie dokładnego czasu fizycznego odczytu. Dlatego:
-
-- może być zaufaną kotwicą historii, jeżeli literalny typ odczytu jest `Rozliczeniowy`,
-- jest domyślnie **wykluczony z uczenia kalibracji CO/CWU**,
-- zgodny ręczny odczyt ma pierwszeństwo i może przesłonić kotwicę fakturową,
-- kotwica niemonotoniczna pozostaje zachowana audytowo, ale nie uczestniczy w estymacji,
-- historyczna kotwica bez lokalnego snapshotu Recorder jest dopuszczalna tylko wtedy, gdy nie uczestniczy w kalibracji i istnieje późniejsza zaufana kotwica,
+- tylko literalny typ `Rozliczeniowy` może być zaufaną kotwicą historii,
+- kotwice fakturowe są domyślnie wykluczone z uczenia kalibracji,
+- zgodny dokładny odczyt ręczny ma pierwszeństwo (`shadowed_by_manual`),
+- kotwice niemonotoniczne są zachowywane audytowo, ale wyłączane z estymacji,
+- historyczna kotwica bez lokalnego snapshotu Recorder jest dopuszczalna tylko jako niekalibracyjna i przy istnieniu późniejszej zaufanej kotwicy,
 - najnowsza baza bieżącej estymacji nadal wymaga danych Recorder.
 
 Kotwica wykluczona z kalibracji nie rozcina poprawnego ręcznego przedziału kalibracyjnego.
 
 ## Faktury PDF
 
-Parser używa `pypdf`, bez OCR. Dane są walidowane przed zapisem, między innymi przez sprawdzanie:
+Parser używa `pypdf`, bez OCR. Waliduje między innymi:
 
-- zgodności różnicy wskazań gazomierza ze zużyciem m³,
-- zgodności m³ w pozycji gazowej z tabelą odczytów,
-- zgodności energii rozliczeniowej ze współczynnikiem konwersji,
-- zgodności energii pozycji dystrybucyjnych z energią rozliczeniową,
-- zgodności współczynnika konwersji pomiędzy wieloma pozycjami gazowymi.
+- zgodność różnicy wskazań gazomierza ze zużyciem m³,
+- zgodność m³ pozycji gazowej z tabelą odczytów,
+- zgodność energii rozliczeniowej ze współczynnikiem konwersji,
+- zgodność energii pozycji dystrybucyjnych z energią rozliczeniową,
+- zgodność współczynnika konwersji pomiędzy wieloma pozycjami gazowymi.
 
-Parser obsługuje zweryfikowane starsze i nowsze warianty faktur, w tym wiele pozycji i stawek w okresie. Przy kilku stawkach wyliczana jest efektywna stawka ważona. Współczynnik konwersji nie jest arbitralnie uśredniany — niespójność dokumentu powoduje błąd fail-closed.
-
-Ponowny import tej samej faktury jest idempotentny. Nowy format dokumentu powinien być akceptowany dopiero po dodaniu jawnego testu regresyjnego.
+Obsługiwane są zweryfikowane starsze i nowsze warianty faktur oraz wiele stawek w jednym okresie. Niespójność dokumentu powoduje błąd fail-closed. Ponowny import tej samej faktury jest idempotentny.
 
 ## Automatyczny Outlook / Microsoft Graph
 
-Automatyczny import korzysta z Microsoft Graph wyłącznie do odczytu wiadomości i załączników.
+Automatyczny import używa Microsoft Graph wyłącznie do odczytu wiadomości i załączników.
 
 Uwierzytelnianie:
 
@@ -106,36 +100,65 @@ Uwierzytelnianie:
 - brak `Mail.ReadWrite`,
 - brak wysyłania, przenoszenia i usuwania wiadomości.
 
-Access token i refresh token są przechowywane w danych wpisu konfiguracji Home Assistanta. Integracja obsługuje automatyczne odświeżanie tokenu oraz reautoryzację przez UI.
+Access token i refresh token są przechowywane w danych wpisu konfiguracji HA. Integracja obsługuje odświeżanie tokenu i reautoryzację przez UI.
 
-Folder, nadawca i temat są konfigurowalne. Publiczny kod nie powinien zawierać identyfikatorów folderów ani danych konkretnej instalacji.
+Niezabezpieczone PDF-y informacyjne są ignorowane. Zaszyfrowany dokument, którego parser nie potrafi bezpiecznie zweryfikować, blokuje całą nową paczkę przed częściowym zapisem.
 
-### Hasło do PDF
+## Numer licznika — od 0.5.0
 
-Hasło do zaszyfrowanych faktur:
+Konfiguracja Outlook/PDF używa jednego jawnego pola:
 
-- jest maskowane w formularzu,
-- nie trafia do DUON Store,
-- nie powinno trafiać do logów ani diagnostyki,
-- nie jest dodatkowo szyfrowane przez integrację na dysku; jego ochrona opiera się na zabezpieczeniu konfiguracji Home Assistanta.
+```text
+meter_number
+```
 
-Niezabezpieczone PDF-y informacyjne są ignorowane przez importer faktur i nie powodują częściowego sukcesu ani błędu paczki.
+Ta sama wartość służy:
+
+- jako hasło do zaszyfrowanych faktur PDF,
+- jako identyfikator licznika w treści SMS.
+
+Numer jest przechowywany jako tekst, aby zachować zera wiodące. Nie trafia do DUON Store ani publicznego kodu. Stare pole `invoice_pdf_password` nie jest automatycznie migrowane; po aktualizacji z 0.4.2 użytkownik wykonuje `Przekonfiguruj`, podaje numer licznika i ponownie kończy Device Code Flow Microsoft.
+
+## SMS z odczytem — od 0.5.0
+
+Przycisk **Zapisz i wyślij SMS** zachowuje istniejący `unique_id` przycisku zapisu odczytu.
+
+Przebieg:
+
+1. dokładny stan gazomierza jest zapisywany jako ręczna fizyczna kotwica,
+2. wartość do SMS jest zaokrąglana do pełnych m³ metodą `ROUND_HALF_UP`,
+3. treść ma format `<stan> <numer licznika>`,
+4. pierwszeństwo przy identyfikacji ma `context.user_id` osoby naciskającej przycisk,
+5. awaryjnie używany jest użytkownik, który wpisał stan,
+6. rejestracje Mobile App są filtrowane po `user_id`, systemie Android i obecności `webhook_id`,
+7. brak dopasowania albo więcej niż jedno urządzenie Android dla użytkownika zatrzymuje operację przed losowym wyborem,
+8. po `webhook_id` ustalana jest dokładna usługa powiadomień Mobile App,
+9. `command_activity` uruchamia `android.intent.action.SENDTO` z URI `smsto:` i przygotowaną treścią,
+10. faktyczne wysłanie SMS pozostaje ręcznym działaniem użytkownika.
+
+Pierwsze użycie może wymagać uprawnienia Android „wyświetlanie nad innymi aplikacjami”.
+
+### Ochrona przed technicznym duplikatem
+
+Pierwsza walidacja developerska ujawniła, że ponowne kliknięcie po ekranie nadania uprawnienia Android zapisywało drugą kotwicę o tej samej wartości.
+
+Finalna reguła 0.5.0:
+
+- ten sam odczyt ponowiony w ciągu **5 minut** od ostatniej kotwicy jest traktowany jako techniczne retry SMS i nie tworzy duplikatu,
+- ten sam odczyt po upływie 5 minut jest normalnym nowym fizycznym odczytem i tworzy nową kotwicę,
+- inna wartość zawsze jest normalnym nowym odczytem.
+
+Dzięki temu kolejne realne odczyty o identycznym stanie gazomierza pozostają wartościowymi kotwicami, a przypadkowe szybkie ponowienie SMS nie zaśmieca historii.
 
 ## Fail-closed i atomowość importu
 
-Przed zatwierdzeniem nowej paczki faktur wykonywany jest pełny preflight. Jeżeli choć jeden nowy zaszyfrowany dokument nie przejdzie parsera lub walidacji:
+Przed zatwierdzeniem nowej paczki faktur wykonywany jest pełny preflight. Błąd dowolnego nowego zaszyfrowanego dokumentu blokuje całą paczkę bez częściowego importu, zmiany kotwic i przebudowy historii.
 
-- nowe faktury z tej synchronizacji nie są częściowo zatwierdzane,
-- kotwice historii nie są zmieniane,
-- kalibracja nie jest przeliczana,
-- historia kanoniczna nie jest przebudowywana na podstawie częściowej paczki,
-- zapisywany jest tylko bezpieczny stan diagnostyczny bez treści faktury, hasła i tokenów.
-
-Po pomyślnym preflight dane są etapowane w pamięci i zapisywane atomowo do Store. Po zapisie następuje ponowny odczyt i weryfikacja. Niepotwierdzony zapis powoduje wycofanie stanu w pamięci i status blokady.
+Po pomyślnym preflight dane są etapowane w pamięci i zapisywane jednym zapisem Store. Po zapisie następuje ponowny odczyt i weryfikacja; niepotwierdzony zapis powoduje rollback stanu w pamięci.
 
 ## Warstwa kosztowa — od 0.4.0
 
-Koszty są publikowane jako osobne zewnętrzne statystyki Recorder:
+Statystyki kosztowe:
 
 ```text
 duon_gaz:canonical_heating_cost
@@ -143,111 +166,49 @@ duon_gaz:canonical_dhw_cost
 duon_gaz:canonical_fixed_cost
 ```
 
-Dodatkowo istnieje zerowy nośnik objętości dla kosztów stałych:
+Zerowy nośnik kosztu stałego:
 
 ```text
 duon_gaz:canonical_fixed_cost_gas
 ```
 
-Jego zużycie wynosi `0 m³`; służy wyłącznie do przypięcia kosztu stałego jako osobnego źródła w Energy Dashboard.
+Daty odczytów gazomierza nie są granicami kosztowymi. Autorytatywny jest literalny okres `Za okres` z faktury, od lokalnej północy `period_start` do początku dnia po `period_end`. DST jest liczone z rzeczywistego czasu UTC.
 
-### Granice księgowania kosztów
+Dla pełnego okresu autorytatywna jest kwota brutto faktury. Koszt zmienny jest dzielony między CO/CWU według kanonicznego zużycia, a pozostała część trafia do kosztów stałych/pozostałych. Pełny zastosowany okres musi domknąć się do brutto faktury przed publikacyjnym zaokrągleniem.
 
-Daty odczytów gazomierza **nie wyznaczają granic kosztowych**. Autorytatywne jest literalne pole `Za okres` z faktury:
-
-- początek: `period_start 00:00` czasu lokalnego,
-- koniec: początek dnia następującego po `period_end`,
-- rzeczywista liczba godzin jest liczona w UTC po zbudowaniu lokalnych granic, dzięki czemu DST jest obsługiwany poprawnie.
-
-Dla pełnego okresu fakturowego autorytatywna jest kwota brutto faktury. Koszt zmienny jest dzielony pomiędzy CO i CWU według kanonicznego zużycia w tym samym okresie, a pozostała część trafia do kosztów stałych / pozostałych opłat.
-
-Każdy zastosowany pełny okres kosztowy musi domknąć się do brutto faktury przed publikacyjnym zaokrągleniem rekordów Recorder. Nakładające się okresy blokują publikację fail-closed. Częściowo pokryta historyczna faktura nie jest sztucznie ekstrapolowana.
-
-### Prowizoryczny ogon kosztów
-
-Po ostatnim zamkniętym okresie fakturowym koszt jest szacowany z bieżącej konfiguracji taryfowej. Zmiana danych fakturowych lub taryfowych wpływających na historię wymusza pełny rebuild; zwykłe pojawienie się nowych godzin może odświeżyć tylko ogon.
+Prowizoryczny ogon po ostatnim zamkniętym okresie jest wyceniany z bieżącej konfiguracji taryfowej.
 
 ## Energy Dashboard
 
-Zweryfikowany rozdzielony model źródeł gazu jest następujący:
+Zweryfikowany model:
 
 - CO: `duon_gaz:canonical_heating` + `duon_gaz:canonical_heating_cost`,
 - CWU: `duon_gaz:canonical_dhw` + `duon_gaz:canonical_dhw_cost`,
 - koszty stałe: `duon_gaz:canonical_fixed_cost_gas` + `duon_gaz:canonical_fixed_cost`.
 
-`duon_gaz:canonical_fixed_cost_gas` pozostaje zerowym nośnikiem objętości; koszt stały jest pobierany niezależnie z `duon_gaz:canonical_fixed_cost`.
+`canonical_fixed_cost_gas` pozostaje zerowym nośnikiem objętości. `canonical_gas` pozostaje statystyką całkowitą/audytową i nie może być dodawana jako czwarte źródło, jeżeli Dashboard używa już CO/CWU.
 
-`duon_gaz:canonical_gas` pozostaje statystyką całkowitą i audytową. Nie należy dodawać jej równolegle jako kolejnego źródła gazu, jeżeli Energy Dashboard korzysta już z rozdziału CO/CWU, ponieważ spowodowałoby to podwójne liczenie zużycia.
-
-Finalna konfiguracja Dashboardu została uruchomiona i zweryfikowana na działającej instalacji. Potwierdzono poprawne rozdzielenie CO/CWU, prawidłowe naliczanie kosztu stałego przy `0 m³` nośnika, zgodność sumy kosztów z warstwą kanoniczną oraz brak podwójnego liczenia całkowitego gazu. Po migracji usunięto stary równoległy tor helperów i jego osierocone statystyki.
+Finalny układ został zweryfikowany na działającej instalacji.
 
 ## Audyt współczynnika konwersji — od 0.4.1
 
-Encja **Audyt współczynnika konwersji** jest wyłącznie diagnostyczna. Nie wpływa na:
+Sensor jest wyłącznie diagnostyczny i nie wpływa na historię kanoniczną, kalibrację, rozliczenia, koszty ani Energy Dashboard.
 
-- historię kanoniczną,
-- kalibrację CO/CWU,
-- rozliczenia fakturowe,
-- statystyki kosztowe,
-- Energy Dashboard.
+Audyt:
 
-Audyt służy do wykrywania długoterminowego dryfu relacji pomiędzy współczynnikiem kWh/m³ z faktur DUON a lokalnym profilem Ariston + gazomierz.
-
-Metoda:
-
-- używa wyłącznie okresów, których obie granice można powiązać z dokładnymi ręcznymi odczytami gazomierza,
-- nie używa arbitralnej godziny dla odczytów znanych tylko z dokładnością do dnia,
+- używa wyłącznie faktur z dwiema dokładnie dopasowanymi ręcznymi granicami,
 - korzysta z istniejącej niezależnej kalibracji CO/CWU,
-- wykorzystuje relację `provisional_m3 / physical_m3` z kanonicznych przedziałów przed normalizacją do gazomierza,
-- wyznacza stałą historyczną referencję kWh/m³ jako medianę ważoną zużyciem,
-- okresy bez dwóch dokładnych granic pomija zamiast zgadywać.
+- wykorzystuje `provisional_m3 / physical_m3` przed normalizacją do gazomierza,
+- wyznacza referencję kWh/m³ jako medianę ważoną zużyciem,
+- pomija niepewne okresy zamiast zgadywać.
 
-Stan sensora jest skumulowanym odchyleniem kosztu zmiennego w PLN liczonym z perspektywy użytkownika:
+Stan sensora jest skumulowanym odchyleniem kosztu zmiennego w PLN z perspektywy użytkownika: `+` oznacza wynik korzystniejszy, `-` mniej korzystny niż lokalna referencja.
 
-- wartość dodatnia — wynik korzystniejszy dla użytkownika niż lokalna referencja,
-- wartość ujemna — wynik mniej korzystny dla użytkownika niż lokalna referencja.
-
-Audyt nie jest laboratoryjnym pomiarem ciepła spalania ani dowodem błędnego rozliczenia. Bez niezależnego kalorymetru wykrywa odchylenie i dryf względem lokalnej historii, a nie bezwzględny błąd dostawcy.
+Nie jest to laboratoryjny pomiar ciepła spalania ani dowód błędnego rozliczenia.
 
 ## Historyczny wykres audytu — od 0.4.2
 
-0.4.2 publikuje prawdziwy historyczny przebieg audytu również do długoterminowych statystyk Recorder pod `statistic_id` równym bieżącemu `entity_id` sensora.
-
-Zasady backfillu:
-
-- źródłem jest wyłącznie historia wygenerowana przez finalny algorytm audytu,
-- pierwszy punkt to `0 PLN` na początku pierwszego ocenianego okresu,
-- każdy kolejny punkt zawiera rzeczywiste skumulowane saldo po zakończeniu ocenianego okresu,
-- publikacja korzysta z `async_import_statistics`, bez bezpośredniego SQL,
-- błąd backfillu nie powoduje niedostępności samej encji audytu.
-
-Dzięki temu wbudowany wykres Home Assistanta może pokazywać historyczne fluktuacje audytu od początku wiarygodnej historii, zamiast tylko zmian stanu od momentu utworzenia encji.
-
-## Stan testów 0.4.2
-
-Aktualny CI:
-
-- kompiluje cały katalog `custom_components/duon_gaz`,
-- uruchamia `python -m unittest discover -s tests -v`,
-- zawiera obecnie **38 testów jednostkowych** i przechodzi w całości.
-
-Zakres testów obejmuje między innymi:
-
-- historię kanoniczną, brakujące godziny i rollbacki,
-- dokładne domknięcie przedziałów do gazomierza,
-- rozdział CO/CWU,
-- scalenie granicznych godzin i odświeżanie ogona,
-- księgowanie kosztów według literalnego okresu faktury,
-- DST,
-- dokładne domknięcie brutto,
-- nakładające się faktury fail-closed,
-- parser starszych i nowszych faktur,
-- atomowy import Outlook i rollback przy niepotwierdzonym Store,
-- reguły kotwic i kalibracji,
-- fingerprint aktywnych kotwic,
-- dokładne ręczne granice audytu współczynnika konwersji,
-- pomijanie niepewnych okresów audytu,
-- historyczny backfill salda audytu i kolizje punktów w tej samej godzinie.
+Przebieg audytu jest publikowany do długoterminowych statystyk Recorder przez `async_import_statistics`. Pierwszy punkt to `0 PLN` na początku pierwszego ocenianego okresu, a kolejne punkty pokazują rzeczywiste skumulowane saldo po zakończeniu ocenianych okresów.
 
 ## Zweryfikowane na działającej instalacji
 
@@ -260,44 +221,43 @@ Potwierdzono między innymi:
 - klasyfikację i priorytet kotwic,
 - brak udziału kotwic fakturowych w uczeniu kalibracji,
 - pełny rebuild po zmianie zestawu aktywnych kotwic,
-- publikację i weryfikację historii gazu, CO i CWU,
+- publikację historii gazu, CO i CWU,
 - dokładne domknięcie CO + CWU do całkowitego gazu,
 - brak ujemnego zużycia i nierozliczonych rollbacków,
-- zachowanie surowych statystyk źródłowych bez modyfikacji,
-- publikację kosztów i domknięcie pełnych okresów do kwot brutto faktur,
-- poprawne zachowanie częściowo pokrytej historii bez sztucznej ekstrapolacji,
-- działanie przyrostowego odświeżania prowizorycznego ogona,
-- audyt współczynnika konwersji oparty na dokładnych ręcznych granicach,
-- poprawną konwencję znaku audytu z perspektywy użytkownika,
-- historyczny wykres audytu z rzeczywistymi punktami zamiast wartości z testowych wersji developerskich,
-- finalną konfigurację Energy Dashboard z trzema źródłami gazu i kosztów,
-- prawidłowy koszt stały przy zerowym nośniku `canonical_fixed_cost_gas`,
-- zgodność toru Energy z historią kanoniczną, fizycznymi kotwicami gazomierza i kosztami fakturowymi,
-- usunięcie starego równoległego toru helperów, countera, automatyzacji kosztu stałego i osieroconych statystyk po migracji.
+- zachowanie surowych statystyk źródłowych,
+- publikację kosztów i domknięcie pełnych okresów do brutto faktur,
+- poprawne zachowanie częściowo pokrytej historii,
+- przyrostowy refresh prowizorycznego ogona,
+- audyt współczynnika konwersji i jego historyczny backfill,
+- finalny Energy Dashboard z trzema źródłami,
+- usunięcie starego równoległego toru helperów i osieroconych statystyk,
+- rekonfigurację numeru licznika 0.5.0,
+- routing SMS do właściwego telefonu użytkownika,
+- poprawne zaokrąglenie i treść SMS,
+- ręczne zatwierdzanie wysłania,
+- domknięcie estymacji po nowej ręcznej kotwicy,
+- ochronę przed szybkim technicznym duplikatem kotwicy.
 
 ## Historia wydań będących punktami architektonicznymi
 
-- **0.3.4** — stabilizacja historii kanonicznej, parsera faktur oraz automatycznego importu Outlook / Graph,
-- **0.4.0** — rozdział CO/CWU i pełna warstwa kosztowa przeznaczona do Energy Dashboard,
-- **0.4.1** — diagnostyczny audyt współczynnika konwersji względem lokalnej relacji Ariston + gazomierz,
-- **0.4.2** — historyczny backfill audytu do długoterminowych statystyk Recorder.
+- **0.3.4** — stabilizacja historii kanonicznej, parsera faktur i Outlook / Graph,
+- **0.4.0** — rozdział CO/CWU i pełna warstwa kosztowa,
+- **0.4.1** — diagnostyczny audyt współczynnika konwersji,
+- **0.4.2** — historyczny backfill audytu do Recorder,
+- **0.5.0** — jawny numer licznika oraz przygotowanie SMS na właściwym Androidzie użytkownika.
 
 ## Dalszy rozwój
 
-Najbliższy osobny etap po 0.4.2:
-
-1. SMS jako osobna funkcja, bez mieszania jej z warstwą kanoniczną i rozliczeniową.
-
-Nowe prace powinny wychodzić z aktualnego `main` na osobnych gałęziach i przechodzić przez CI przed scaleniem.
+Nowe prace powinny wychodzić z aktualnego `main` na osobnych gałęziach i przechodzić przez CI przed scaleniem. Funkcja SMS jest od 0.5.0 częścią stabilnego zakresu i nie jest już osobnym elementem roadmapy.
 
 ## Zasady bezpieczeństwa dalszych prac
 
 - żadnych bezpośrednich zapisów SQL,
 - nie modyfikować surowych statystyk CO/CWU,
-- nie publikować danych konkretnej instalacji: identyfikatorów punktu odbioru, prywatnych identyfikatorów encji, odczytów, numerów faktur ani innych danych użytkownika,
-- nie logować hasła PDF, access tokenu ani refresh tokenu,
+- nie publikować danych konkretnej instalacji,
+- nie logować access tokenu ani refresh tokenu,
 - nie akceptować nowego formatu faktury przez nadmiernie szerokie regexy bez testu regresyjnego,
 - zachować fail-closed tam, gdzie częściowy zapis mógłby uszkodzić spójność historii lub rozliczeń,
-- używać publicznych API Home Assistanta zamiast bezpośrednich modyfikacji bazy,
-- ograniczać restarty Home Assistanta i grupować zmiany przed restartem,
+- używać publicznych API Home Assistanta,
+- ograniczać restarty Home Assistanta i grupować zmiany,
 - zachować polskie komunikaty, dokumentację i opisy UI.

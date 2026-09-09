@@ -1,8 +1,6 @@
 """Number platform for DUON Gaz."""
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_HALF_UP
-
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfVolume
@@ -13,6 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .runtime import DuonGazRuntime
+from .sms_rules import submitted_meter_value
 
 
 async def async_setup_entry(
@@ -26,7 +25,7 @@ async def async_setup_entry(
 def _sms_meter_value(value: float | None) -> int | None:
     if value is None:
         return None
-    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return submitted_meter_value(value)
 
 
 class DuonPendingMeterNumber(NumberEntity):

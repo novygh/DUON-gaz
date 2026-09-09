@@ -20,14 +20,14 @@
         }
       },
       "reconfigure": {
-        "title": "Połącz Outlook z DUON Gaz",
-        "description": "DUON Gaz używa Microsoft Device Code Flow jako klient publiczny — bez sekretu aplikacji i bez okresowej wymiany sekretu. W Microsoft Entra aplikacja musi mieć delegowane **Mail.Read** oraz włączone publiczne przepływy klienta. Po zapisaniu pojawi się kod jednorazowego logowania.",
+        "title": "Połącz Outlook i ustaw numer licznika",
+        "description": "Podaj numer licznika DUON. Integracja użyje go jako hasła do zaszyfrowanych faktur PDF oraz jako identyfikatora w przygotowywanym SMS z odczytem. DUON Gaz używa Microsoft Device Code Flow jako klient publiczny — bez sekretu aplikacji i bez okresowej wymiany sekretu. W Microsoft Entra aplikacja musi mieć delegowane **Mail.Read** oraz włączone publiczne przepływy klienta. Po zapisaniu pojawi się kod jednorazowego logowania.",
         "data": {
           "microsoft_client_id": "Identyfikator aplikacji (Client ID) Microsoft",
           "outlook_folder": "Folder Outlook lub pełna ścieżka folderu",
           "outlook_sender": "Adres nadawcy faktur",
           "outlook_subject": "Temat wiadomości",
-          "invoice_pdf_password": "Hasło do faktur PDF",
+          "meter_number": "Numer licznika",
           "outlook_check_hour": "Godzina codziennego sprawdzania (0–23)"
         },
         "data_description": {
@@ -35,7 +35,7 @@
           "outlook_folder": "Nazwa albo ścieżka folderu, np. Dom/Faktury.",
           "outlook_sender": "Wiadomości od innych nadawców są ignorowane.",
           "outlook_subject": "Temat musi pasować dokładnie, bez rozróżniania wielkości liter.",
-          "invoice_pdf_password": "Pole jest maskowane. Przy ponownej konfiguracji można zostawić je puste, aby zachować dotychczasowe hasło.",
+          "meter_number": "Jawny numer licznika DUON. Jest używany jako hasło PDF i drugi człon treści SMS z odczytem.",
           "outlook_check_hour": "Czas lokalny Home Assistanta."
         }
       },
@@ -55,6 +55,7 @@
     "error": {
       "same_entity": "Wybierz dwa różne sensory źródłowe.",
       "required": "Pole jest wymagane.",
+      "meter_number_invalid": "Numer licznika powinien zawierać wyłącznie cyfry.",
       "authorization_pending": "Logowanie Microsoft nie zostało jeszcze zakończone. Zaloguj się kodem pokazanym powyżej i spróbuj ponownie."
     },
     "abort": {
@@ -62,7 +63,7 @@
       "missing_client_id": "Brak identyfikatora aplikacji Microsoft. Użyj opcji Przekonfiguruj.",
       "auth_session_missing": "Sesja logowania Microsoft wygasła. Uruchom konfigurację ponownie.",
       "reauth_successful": "Outlook został ponownie połączony z DUON Gaz.",
-      "reconfigure_successful": "Konfiguracja Outlook w DUON Gaz została zaktualizowana."
+      "reconfigure_successful": "Konfiguracja Outlook i numer licznika w DUON Gaz zostały zaktualizowane."
     }
   },
   "options": {
