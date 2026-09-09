@@ -20,7 +20,7 @@ from .sms_rules import (
     build_sms_body,
     build_sms_intent_data,
     matching_android_registrations,
-    pending_value_already_saved,
+    recent_same_reading_for_sms_retry,
     submitted_meter_value,
 )
 
@@ -149,13 +149,14 @@ class DuonConfirmMeterButton(ButtonEntity):
 
         manual_readings = self.runtime._manual_readings()
         last_manual = manual_readings[-1] if manual_readings else None
-        already_saved = pending_value_already_saved(
+        now = dt_util.utcnow()
+        anchor_reused = recent_same_reading_for_sms_retry(
             float(exact),
-            self.runtime.data.get("pending_entered_at"),
+            now,
             last_manual,
         )
 
-        if already_saved:
+        if anchor_reused:
             reading = last_manual
         else:
             try:
@@ -178,8 +179,8 @@ class DuonConfirmMeterButton(ButtonEntity):
             "status": "prepared",
             "meter_m3": reading["meter_m3_submitted"],
             "target_user_id": target_user_id,
-            "prepared_at": dt_util.utcnow().isoformat(),
-            "anchor_reused": already_saved,
+            "prepared_at": now.isoformat(),
+            "anchor_reused": anchor_reused,
         }
         await self.runtime.async_save()
         self.runtime.async_notify()
