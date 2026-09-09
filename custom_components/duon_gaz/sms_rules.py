@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import quote
 
 DUON_SMS_RECIPIENT = "661000860"
+SMS_RETRY_WINDOW_SECONDS = 300
 
 
 def submitted_meter_value(value: float) -> int:
@@ -73,18 +74,24 @@ def _parse_aware_iso(value: Any) -> datetime | None:
     return parsed
 
 
-def pending_value_already_saved(
+def recent_same_reading_for_sms_retry(
     meter_m3: float,
-    pending_entered_at: Any,
+    now: datetime,
     last_manual_reading: Mapping[str, Any] | None,
+    *,
+    retry_window_seconds: int = SMS_RETRY_WINDOW_SECONDS,
 ) -> bool:
-    """Sprawdź, czy bieżące pole Number zostało już zapisane jako ręczna kotwica.
+    """Rozpoznaj wyłącznie krótkie ponowienie SMS dla tej samej kotwicy.
 
-    Ponowne kliknięcie przycisku bez ponownego wpisania stanu ma jedynie ponowić
-    otwarcie edytora SMS. Nowe wpisanie nawet tej samej wartości aktualizuje
-    ``pending_entered_at`` i pozwala zapisać nową rzeczywistą kotwicę.
+    Taka sama wartość licznika może być prawidłową nową kotwicą później, nawet
+    bez ponownej edycji pola Number. Dlatego deduplikujemy tylko identyczny
+    odczyt zapisany bardzo niedawno — typowy przypadek ponownego kliknięcia po
+    ekranie uprawnienia Android. Po upływie okna kolejne kliknięcie zawsze może
+    utworzyć nową fizyczną kotwicę, również z niezmienionym stanem licznika.
     """
     if not last_manual_reading:
+        return False
+    if now.tzinfo is None or now.utcoffset() is None:
         return False
 
     last_value = last_manual_reading.get(
@@ -97,9 +104,9 @@ def pending_value_already_saved(
     if not same_value:
         return False
 
-    entered_at = _parse_aware_iso(pending_entered_at)
     saved_at = _parse_aware_iso(last_manual_reading.get("timestamp"))
-    if entered_at is None or saved_at is None:
+    if saved_at is None:
         return False
 
-    return saved_at >= entered_at
+    age_seconds = (now - saved_at).total_seconds()
+    return 0.0 <= age_seconds <= max(0, int(retry_window_seconds))
