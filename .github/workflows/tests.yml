@@ -3,7 +3,7 @@ name: Testy DUON Gaz
 on:
   push:
     branches:
-      - feature/store-v2-recorder-sums
+      - main
   pull_request:
 
 permissions:

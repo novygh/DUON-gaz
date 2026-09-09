@@ -136,15 +136,17 @@ Kotwice fakturowe są domyślnie wyłączone z uczenia kalibracji CO/CWU. Zgodny
 
 ## Energy Dashboard
 
-Dla rozdzielonego widoku gazu konfiguracja jest projektowana jako trzy źródła:
+Zweryfikowana konfiguracja rozdzielonego widoku gazu korzysta z trzech źródeł:
 
 - CO: `duon_gaz:canonical_heating` + `duon_gaz:canonical_heating_cost`,
 - CWU: `duon_gaz:canonical_dhw` + `duon_gaz:canonical_dhw_cost`,
 - koszty stałe: `duon_gaz:canonical_fixed_cost_gas` + `duon_gaz:canonical_fixed_cost`.
 
-`duon_gaz:canonical_fixed_cost_gas` zawsze ma zużycie `0 m³`; służy tylko jako nośnik kosztu stałego.
+`duon_gaz:canonical_fixed_cost_gas` zawsze ma zużycie `0 m³`; służy tylko jako nośnik kosztu stałego. Koszt jest pobierany z osobnej statystyki `duon_gaz:canonical_fixed_cost`.
 
 Jeżeli w Energy Dashboard używany jest rozdział CO/CWU, nie należy dodawać równolegle `duon_gaz:canonical_gas` jako kolejnego źródła gazu, ponieważ podwoiłoby to zużycie.
+
+Na działającej instalacji potwierdzono poprawne wyświetlanie zużycia CO/CWU i kosztu stałego oraz zgodność całego toru z kanoniczną historią, fizycznymi kotwicami gazomierza i kosztami wynikającymi z faktur.
 
 ## Bezpieczeństwo danych historycznych
 
@@ -167,11 +169,13 @@ Na działającej instalacji potwierdzono m.in.:
 - pomijanie faktur bez dwóch dokładnych ręcznych granic,
 - poprawną, odwróconą z perspektywy użytkownika konwencję znaku salda audytu,
 - poprawny backfill historycznego przebiegu audytu do Recorder,
-- brak sztucznych skoków pochodzących z wcześniejszych wersji developerskich po jednorazowym oczyszczeniu historii testowej.
+- brak sztucznych skoków pochodzących z wcześniejszych wersji developerskich po jednorazowym oczyszczeniu historii testowej,
+- finalną konfigurację Energy Dashboard na trzech źródłach bez podwójnego liczenia `canonical_gas`,
+- poprawne naliczanie kosztu stałego przez zerowy nośnik objętości i osobną statystykę kosztową,
+- usunięcie starego równoległego toru helperów i osieroconych statystyk po migracji do `canonical_*`.
 
 ## Dalszy rozwój
 
-Po wydaniu 0.4.2 pozostają osobno m.in.:
+Po stabilizacji 0.4.2 najbliższą osobną funkcją pozostaje:
 
-- finalna konfiguracja Energy Dashboard na działającej instalacji,
-- SMS.
+- SMS, bez mieszania tej funkcji z warstwą kanoniczną i rozliczeniową.
