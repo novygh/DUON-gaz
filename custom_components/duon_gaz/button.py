@@ -90,22 +90,35 @@ class DuonConfirmMeterButton(ButtonEntity):
         registration: Mapping[str, Any],
         body: str,
     ) -> None:
-        if not self.hass.services.has_service("notify", "mobile_app"):
-            raise HomeAssistantError(
-                "Usługa notify.mobile_app nie jest dostępna. Sprawdź integrację Home Assistant Mobile App na telefonie."
-            )
-
         webhook_id = str(registration.get("webhook_id") or "").strip()
         if not webhook_id:
             raise HomeAssistantError("Rejestracja Mobile App nie ma identyfikatora webhook.")
 
+        if "mobile_app" not in self.hass.data:
+            raise HomeAssistantError(
+                "Integracja Home Assistant Mobile App nie jest załadowana."
+            )
+
+        try:
+            from homeassistant.components.mobile_app.util import get_notify_service
+
+            notify_service = get_notify_service(self.hass, webhook_id)
+        except (KeyError, RuntimeError) as err:
+            raise HomeAssistantError(
+                "Nie udało się odczytać usługi powiadomień Mobile App dla telefonu."
+            ) from err
+
+        if not notify_service or not self.hass.services.has_service("notify", notify_service):
+            raise HomeAssistantError(
+                "Telefon nie ma aktywnej usługi powiadomień Home Assistant Mobile App."
+            )
+
         context = getattr(self, "_context", None)
         await self.hass.services.async_call(
             "notify",
-            "mobile_app",
+            notify_service,
             {
                 "message": "command_activity",
-                "target": [webhook_id],
                 "data": build_sms_intent_data(body),
             },
             blocking=True,
