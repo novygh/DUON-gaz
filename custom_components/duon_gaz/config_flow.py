@@ -16,7 +16,6 @@ from homeassistant.helpers.selector import (
     EntitySelectorConfig,
     TextSelector,
     TextSelectorConfig,
-    TextSelectorType,
 )
 
 from .const import (
@@ -26,7 +25,7 @@ from .const import (
     CONF_DIST_VAR_RATE_NET,
     CONF_GAS_RATE_NET,
     CONF_HEATING_ENTITY,
-    CONF_INVOICE_PDF_PASSWORD,
+    CONF_METER_NUMBER,
     CONF_MICROSOFT_CLIENT_ID,
     CONF_MICROSOFT_TOKEN,
     CONF_OUTLOOK_CHECK_HOUR,
@@ -45,6 +44,7 @@ from .microsoft_auth import (
     async_poll_device_code,
     async_request_device_code,
 )
+from .sms_rules import normalize_meter_number
 
 
 def _configuration_schema() -> vol.Schema:
@@ -72,45 +72,41 @@ def _configuration_schema() -> vol.Schema:
             vol.Required(CONF_DIST_FIXED_NET): vol.All(
                 vol.Coerce(float), vol.Range(min=0.0, max=500.0)
             ),
-            vol.Required(CONF_VAT): vol.All(
-                vol.Coerce(float), vol.Range(min=0.0, max=1.0)
-            ),
+            vol.Required(CONF_VAT): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
         }
     )
 
 
 def _outlook_schema(current: Mapping[str, Any]) -> vol.Schema:
     """Zbuduj formularz jednorazowego połączenia Outlook i ustawień faktur."""
-    password_selector = TextSelector(
-        TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="current-password")
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_MICROSOFT_CLIENT_ID,
+                default=str(current.get(CONF_MICROSOFT_CLIENT_ID) or ""),
+            ): str,
+            vol.Required(
+                CONF_OUTLOOK_FOLDER,
+                default=str(current.get(CONF_OUTLOOK_FOLDER) or ""),
+            ): str,
+            vol.Required(
+                CONF_OUTLOOK_SENDER,
+                default=str(current.get(CONF_OUTLOOK_SENDER) or DEFAULT_OUTLOOK_SENDER),
+            ): str,
+            vol.Required(
+                CONF_OUTLOOK_SUBJECT,
+                default=str(current.get(CONF_OUTLOOK_SUBJECT) or DEFAULT_OUTLOOK_SUBJECT),
+            ): str,
+            vol.Required(
+                CONF_METER_NUMBER,
+                default=str(current.get(CONF_METER_NUMBER) or ""),
+            ): TextSelector(TextSelectorConfig()),
+            vol.Required(
+                CONF_OUTLOOK_CHECK_HOUR,
+                default=int(current.get(CONF_OUTLOOK_CHECK_HOUR, DEFAULT_OUTLOOK_CHECK_HOUR)),
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
+        }
     )
-    schema: dict[Any, Any] = {
-        vol.Required(
-            CONF_MICROSOFT_CLIENT_ID,
-            default=str(current.get(CONF_MICROSOFT_CLIENT_ID) or ""),
-        ): str,
-        vol.Required(
-            CONF_OUTLOOK_FOLDER,
-            default=str(current.get(CONF_OUTLOOK_FOLDER) or ""),
-        ): str,
-        vol.Required(
-            CONF_OUTLOOK_SENDER,
-            default=str(current.get(CONF_OUTLOOK_SENDER) or DEFAULT_OUTLOOK_SENDER),
-        ): str,
-        vol.Required(
-            CONF_OUTLOOK_SUBJECT,
-            default=str(current.get(CONF_OUTLOOK_SUBJECT) or DEFAULT_OUTLOOK_SUBJECT),
-        ): str,
-        vol.Required(
-            CONF_OUTLOOK_CHECK_HOUR,
-            default=int(current.get(CONF_OUTLOOK_CHECK_HOUR, DEFAULT_OUTLOOK_CHECK_HOUR)),
-        ): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
-    }
-    if current.get(CONF_INVOICE_PDF_PASSWORD):
-        schema[vol.Optional(CONF_INVOICE_PDF_PASSWORD)] = password_selector
-    else:
-        schema[vol.Required(CONF_INVOICE_PDF_PASSWORD)] = password_selector
-    return vol.Schema(schema)
 
 
 def _validate_sources(user_input: dict[str, Any]) -> dict[str, str]:
@@ -200,13 +196,12 @@ class DuonGazConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         else:
             settings[CONF_OUTLOOK_FOLDER] = folder
 
-        password = str(settings.get(CONF_INVOICE_PDF_PASSWORD) or "")
-        if not password:
-            old_password = str(current.get(CONF_INVOICE_PDF_PASSWORD) or "")
-            if old_password:
-                settings[CONF_INVOICE_PDF_PASSWORD] = old_password
-            else:
-                errors[CONF_INVOICE_PDF_PASSWORD] = "required"
+        try:
+            settings[CONF_METER_NUMBER] = normalize_meter_number(
+                str(settings.get(CONF_METER_NUMBER) or "")
+            )
+        except ValueError:
+            errors[CONF_METER_NUMBER] = "meter_number_invalid"
 
         if errors:
             return self.async_show_form(
@@ -291,9 +286,10 @@ class DuonGazConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="single_instance_allowed")
 
         updated[CONF_MICROSOFT_TOKEN] = self._token_result
-        # Usuń dane starego modelu Application Credentials przy migracji 0.3.4.
+        # Usuń dane starych modeli konfiguracji po świadomym Przekonfiguruj.
         updated.pop("auth_implementation", None)
         updated.pop("token", None)
+        updated.pop("invoice_pdf_password", None)
         return self.async_update_reload_and_abort(entry, data=updated)
 
     async def async_step_outlook_auth_error(
