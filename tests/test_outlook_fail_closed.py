@@ -61,7 +61,7 @@ def _install_stubs() -> None:
     sys.modules[canonical_statistics.__name__] = canonical_statistics
 
     const = ModuleType(f"{PACKAGE}.const")
-    const.CONF_INVOICE_PDF_PASSWORD = "invoice_pdf_password"
+    const.CONF_METER_NUMBER = "meter_number"
     const.CONF_OUTLOOK_FOLDER = "outlook_folder"
     const.CONF_OUTLOOK_SENDER = "outlook_sender"
     const.CONF_OUTLOOK_SUBJECT = "outlook_subject"
@@ -165,7 +165,7 @@ def _config() -> dict:
         "outlook_folder": "Faktury",
         "outlook_sender": "sender@example.invalid",
         "outlook_subject": "Faktura",
-        "invoice_pdf_password": "sekret-testowy",
+        "meter_number": "123456",
     }
 
 
