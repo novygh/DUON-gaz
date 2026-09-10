@@ -23,6 +23,7 @@ from .sms_rules import (
     build_sms_body,
     build_sms_intent_data,
     matching_android_registrations,
+    pending_meter_sms_clear_deadline,
     recent_same_reading_for_sms_retry,
     submitted_meter_value,
 )
@@ -126,7 +127,27 @@ class DuonConfirmMeterButton(ButtonEntity):
     async def _async_restore_pending_clear(self) -> None:
         """Restore or finish a delayed clear persisted before restart."""
         raw = self.runtime.data.get("pending_clear_at")
+
         if not raw:
+            manual_readings = self.runtime._manual_readings()
+            last_manual = manual_readings[-1] if manual_readings else None
+            clear_at = pending_meter_sms_clear_deadline(
+                self.runtime.pending_meter_m3,
+                self.runtime.data.get("pending_entered_at"),
+                last_manual,
+            )
+            if clear_at is None:
+                return
+
+            now = dt_util.utcnow()
+            if clear_at.astimezone(now.tzinfo) <= now:
+                await self._async_clear_pending_meter()
+                return
+
+            self.runtime.data["pending_clear_at"] = clear_at.isoformat()
+            await self.runtime.async_save()
+            self.runtime.async_notify()
+            self._schedule_pending_clear_timer(clear_at)
             return
 
         if self.runtime.pending_meter_m3 is None:
