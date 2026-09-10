@@ -1,7 +1,8 @@
 """Button platform for DUON Gaz."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.button import ButtonEntity
@@ -9,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 from .canonical_history import CanonicalHistoryError
@@ -17,6 +19,7 @@ from .canonical_statistics import async_publish_canonical_statistics
 from .const import CONF_METER_NUMBER, DOMAIN
 from .runtime import DuonGazRuntime
 from .sms_rules import (
+    SMS_RETRY_WINDOW_SECONDS,
     build_sms_body,
     build_sms_intent_data,
     matching_android_registrations,
@@ -58,10 +61,91 @@ class DuonConfirmMeterButton(ButtonEntity):
 
     def __init__(self, runtime: DuonGazRuntime) -> None:
         self.runtime = runtime
+        self._pending_clear_unsub: Callable[[], None] | None = None
 
     @property
     def device_info(self) -> DeviceInfo:
         return _device_info(self.runtime)
+
+    async def async_added_to_hass(self) -> None:
+        """Restore a pending delayed clear after Home Assistant restart."""
+        await super().async_added_to_hass()
+        await self._async_restore_pending_clear()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel the local timer when the entity is unloaded."""
+        self._cancel_pending_clear_timer()
+        await super().async_will_remove_from_hass()
+
+    def _cancel_pending_clear_timer(self) -> None:
+        if self._pending_clear_unsub is None:
+            return
+        self._pending_clear_unsub()
+        self._pending_clear_unsub = None
+
+    async def _async_clear_pending_meter(self) -> None:
+        """Clear the editable pending value without touching stored anchors."""
+        self._cancel_pending_clear_timer()
+        self.runtime.data["pending_meter_m3"] = None
+        self.runtime.data["pending_entered_by_user_id"] = None
+        self.runtime.data["pending_entered_at"] = None
+        self.runtime.data.pop("pending_clear_at", None)
+        await self.runtime.async_save()
+        self.runtime.async_notify()
+
+    def _schedule_pending_clear_timer(self, clear_at) -> None:
+        """Schedule clearing exactly at the persisted retry deadline."""
+        self._cancel_pending_clear_timer()
+        now = dt_util.utcnow()
+        remaining = max(
+            0.0,
+            (clear_at.astimezone(now.tzinfo) - now).total_seconds(),
+        )
+        expected = clear_at.isoformat()
+
+        async def _clear(_now) -> None:
+            self._pending_clear_unsub = None
+            if self.runtime.data.get("pending_clear_at") != expected:
+                return
+            await self._async_clear_pending_meter()
+
+        self._pending_clear_unsub = async_call_later(
+            self.hass,
+            remaining,
+            _clear,
+        )
+
+    async def _async_schedule_pending_clear(self) -> None:
+        """Keep the value for the retry window, then clear it automatically."""
+        clear_at = dt_util.utcnow() + timedelta(seconds=SMS_RETRY_WINDOW_SECONDS)
+        self.runtime.data["pending_clear_at"] = clear_at.isoformat()
+        await self.runtime.async_save()
+        self.runtime.async_notify()
+        self._schedule_pending_clear_timer(clear_at)
+
+    async def _async_restore_pending_clear(self) -> None:
+        """Restore or finish a delayed clear persisted before restart."""
+        raw = self.runtime.data.get("pending_clear_at")
+        if not raw:
+            return
+
+        if self.runtime.pending_meter_m3 is None:
+            self.runtime.data.pop("pending_clear_at", None)
+            await self.runtime.async_save()
+            return
+
+        clear_at = dt_util.parse_datetime(str(raw))
+        if clear_at is None or clear_at.tzinfo is None:
+            self.runtime.data.pop("pending_clear_at", None)
+            await self.runtime.async_save()
+            return
+
+        now = dt_util.utcnow()
+        if clear_at.astimezone(now.tzinfo) <= now:
+            await self._async_clear_pending_meter()
+            return
+
+        self._schedule_pending_clear_timer(clear_at)
 
     def _target_user_id(self) -> tuple[str | None, str | None, str | None]:
         context = getattr(self, "_context", None)
@@ -129,7 +213,7 @@ class DuonConfirmMeterButton(ButtonEntity):
     async def async_press(self) -> None:
         exact = self.runtime.pending_meter_m3
         if exact is None:
-            raise HomeAssistantError("Najpierw wpisz stan gazomierza.")
+            return
 
         meter_number = str(self.runtime.config.get(CONF_METER_NUMBER) or "")
         try:
@@ -210,6 +294,11 @@ class DuonConfirmMeterButton(ButtonEntity):
         )
         await self.runtime.async_save()
         self.runtime.async_notify()
+
+        if anchor_reused:
+            await self._async_clear_pending_meter()
+        else:
+            await self._async_schedule_pending_clear()
 
 
 class DuonCanonicalPreviewButton(ButtonEntity):
