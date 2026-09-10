@@ -4,9 +4,9 @@ Niestandardowa integracja Home Assistant do rekonstrukcji i bieżącego śledzen
 
 ## Aktualna wersja
 
-**0.5.0** — stabilne wydanie dodające przygotowanie SMS z odczytem gazomierza na właściwym telefonie użytkownika oraz upraszczające konfigurację numeru licznika.
+**0.5.1** — wydanie bezpieczeństwa UX dla obsługi ręcznego odczytu i SMS: puste pole jest ignorowane, a poprawnie przygotowany odczyt jest automatycznie czyszczony po oknie technicznego retry.
 
-Szczegóły wydania: [`RELEASE_NOTES_0.5.0.md`](RELEASE_NOTES_0.5.0.md).
+Szczegóły wydania: [`RELEASE_NOTES_0.5.1.md`](RELEASE_NOTES_0.5.1.md).
 
 ## Główne możliwości
 
@@ -78,6 +78,37 @@ Przebieg:
 Integracja nie wysyła SMS samodzielnie.
 
 Przy pierwszym użyciu Android może poprosić Home Assistant Mobile App o uprawnienie „wyświetlanie nad innymi aplikacjami”. Ponowne kliknięcie z tym samym odczytem w ciągu 5 minut jest traktowane jako techniczne ponowienie SMS i nie tworzy duplikatu kotwicy. Ten sam stan po upływie 5 minut jest traktowany jako nowy rzeczywisty odczyt — także gdy gazomierz się nie zmienił.
+
+### Dodatkowe zabezpieczenia od 0.5.1
+
+- naciśnięcie `Zapisz i wyślij SMS` przy pustym polu jest ignorowane bez błędu i bez skutków ubocznych,
+- po pierwszym poprawnym otwarciu edytora SMS wpisana wartość pozostaje jeszcze przez 5 minut, aby umożliwić retry po ekranie uprawnienia Android,
+- po upływie 5 minut pole jest automatycznie czyszczone,
+- jeżeli w tym czasie użytkownik wykona retry i edytor SMS zostanie ponownie poprawnie wywołany, pole jest czyszczone od razu,
+- termin czyszczenia jest zapisywany w Store i po restarcie Home Assistanta zostaje odtworzony,
+- wpisanie nowej wartości anulowuje oczekujące automatyczne czyszczenie.
+
+### Potwierdzenie kliknięcia na dashboardzie
+
+Potwierdzenie jest funkcją interfejsu Lovelace, a nie właściwością `ButtonEntity`. Dlatego należy je skonfigurować na karcie/wierszu dashboardu, z którego użytkownik uruchamia SMS. Przykład:
+
+```yaml
+type: button
+entity: button.TWOJ_PRZYCISK_DUON
+name: Zapisz i wyślij SMS
+tap_action:
+  action: perform-action
+  perform_action: button.press
+  target:
+    entity_id: button.TWOJ_PRZYCISK_DUON
+  confirmation:
+    title: Potwierdź odczyt
+    text: Zapisać stan gazomierza i przygotować SMS?
+    confirm_text: Wyślij
+    dismiss_text: Anuluj
+```
+
+Takie potwierdzenie chroni przed przypadkowym tapnięciem podczas przewijania dashboardu. Bezpośrednie wywołanie akcji `button.press` z automatyzacji lub Narzędzi deweloperskich nie korzysta z dialogu Lovelace.
 
 ## Numer licznika
 
