@@ -4,7 +4,7 @@ from __future__ import annotations
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -65,8 +65,22 @@ class DuonPendingMeterNumber(NumberEntity):
             "sms_meter_m3": _sms_meter_value(self.runtime.pending_meter_m3),
         }
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self.hass.bus.async_listen(
+                f"{self.runtime.entry_id}_duon_gaz_update",
+                self._handle_runtime_update,
+            )
+        )
+
+    @callback
+    def _handle_runtime_update(self, _event) -> None:
+        self.async_write_ha_state()
+
     async def async_set_native_value(self, value: float) -> None:
         context = getattr(self, "_context", None)
+        self.runtime.data.pop("pending_clear_at", None)
         self.runtime.data["pending_entered_by_user_id"] = (
             context.user_id if context is not None else None
         )
