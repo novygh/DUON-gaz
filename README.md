@@ -4,9 +4,9 @@ Niestandardowa integracja Home Assistant do rekonstrukcji i bieżącego śledzen
 
 ## Aktualna wersja
 
-**0.5.1** — wydanie bezpieczeństwa UX dla obsługi ręcznego odczytu i SMS: puste pole jest ignorowane, a poprawnie przygotowany odczyt jest automatycznie czyszczony po oknie technicznego retry.
+**0.5.2** — poprawka migracyjna dla pola ręcznego odczytu: po aktualizacji ze starszej wersji integracja rozpoznaje także pozostawioną po SMS wartość, która nie miała jeszcze zapisanego `pending_clear_at`, i bezpiecznie ją czyści.
 
-Szczegóły wydania: [`RELEASE_NOTES_0.5.1.md`](RELEASE_NOTES_0.5.1.md).
+Szczegóły wydania: [`RELEASE_NOTES_0.5.2.md`](RELEASE_NOTES_0.5.2.md).
 
 ## Główne możliwości
 
@@ -88,27 +88,11 @@ Przy pierwszym użyciu Android może poprosić Home Assistant Mobile App o upraw
 - termin czyszczenia jest zapisywany w Store i po restarcie Home Assistanta zostaje odtworzony,
 - wpisanie nowej wartości anulowuje oczekujące automatyczne czyszczenie.
 
-### Potwierdzenie kliknięcia na dashboardzie
+### Poprawka migracyjna 0.5.2
 
-Potwierdzenie jest funkcją interfejsu Lovelace, a nie właściwością `ButtonEntity`. Dlatego należy je skonfigurować na karcie/wierszu dashboardu, z którego użytkownik uruchamia SMS. Przykład:
+Wersja 0.5.0 nie zapisywała `pending_clear_at`, dlatego sama 0.5.1 nie mogła po restarcie rozpoznać starej wartości pozostawionej przez wcześniejszy SMS. 0.5.2 rekonstruuje termin czyszczenia na podstawie ostatniej ręcznej kotwicy i jej audytu `sms.status = composer_requested`.
 
-```yaml
-type: button
-entity: button.TWOJ_PRZYCISK_DUON
-name: Zapisz i wyślij SMS
-tap_action:
-  action: perform-action
-  perform_action: button.press
-  target:
-    entity_id: button.TWOJ_PRZYCISK_DUON
-  confirmation:
-    title: Potwierdź odczyt
-    text: Zapisać stan gazomierza i przygotować SMS?
-    confirm_text: Wyślij
-    dismiss_text: Anuluj
-```
-
-Takie potwierdzenie chroni przed przypadkowym tapnięciem podczas przewijania dashboardu. Bezpośrednie wywołanie akcji `button.press` z automatyzacji lub Narzędzi deweloperskich nie korzysta z dialogu Lovelace.
+Automatyczne czyszczenie jest fail-closed: działa tylko wtedy, gdy wartość pola dokładnie odpowiada ostatniej kotwicy SMS i pole nie zostało ponownie edytowane po przygotowaniu tej wiadomości. Inna lub świeżo wpisana wartość pozostaje nietknięta.
 
 ## Numer licznika
 

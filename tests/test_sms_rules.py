@@ -25,6 +25,7 @@ build_sms_body = MODULE.build_sms_body
 build_sms_intent_data = MODULE.build_sms_intent_data
 matching_android_registrations = MODULE.matching_android_registrations
 normalize_meter_number = MODULE.normalize_meter_number
+pending_meter_sms_clear_deadline = MODULE.pending_meter_sms_clear_deadline
 recent_same_reading_for_sms_retry = MODULE.recent_same_reading_for_sms_retry
 submitted_meter_value = MODULE.submitted_meter_value
 
@@ -99,6 +100,73 @@ class TestSmsRules(unittest.TestCase):
         }
         now = datetime(2026, 9, 9, 9, 28, 28, tzinfo=timezone.utc)
         self.assertFalse(recent_same_reading_for_sms_retry(1807.26, now, last))
+
+    def test_stary_pending_z_050_dostaje_deadline_z_requested_at(self) -> None:
+        last = {
+            "meter_m3": 1807.25,
+            "meter_m3_exact": 1807.25,
+            "sms": {
+                "status": "composer_requested",
+                "requested_at": "2026-09-09T10:38:13+00:00",
+            },
+        }
+        deadline = pending_meter_sms_clear_deadline(
+            1807.25,
+            "2026-09-09T09:27:50+00:00",
+            last,
+        )
+        self.assertEqual(
+            deadline,
+            datetime(2026, 9, 9, 10, 43, 13, tzinfo=timezone.utc),
+        )
+
+    def test_stary_pending_nie_jest_czyszczony_gdy_wartosc_nie_pasuje(self) -> None:
+        last = {
+            "meter_m3": 1807.25,
+            "sms": {
+                "status": "composer_requested",
+                "requested_at": "2026-09-09T10:38:13+00:00",
+            },
+        }
+        self.assertIsNone(
+            pending_meter_sms_clear_deadline(
+                1808.0,
+                "2026-09-09T10:40:00+00:00",
+                last,
+            )
+        )
+
+    def test_stary_pending_nie_jest_czyszczony_po_ponownej_edycji(self) -> None:
+        last = {
+            "meter_m3": 1807.25,
+            "sms": {
+                "status": "composer_requested",
+                "requested_at": "2026-09-09T10:38:13+00:00",
+            },
+        }
+        self.assertIsNone(
+            pending_meter_sms_clear_deadline(
+                1807.25,
+                "2026-09-09T10:40:00+00:00",
+                last,
+            )
+        )
+
+    def test_stary_pending_bez_poprawnego_sms_nie_jest_czyszczony(self) -> None:
+        last = {
+            "meter_m3": 1807.25,
+            "sms": {
+                "status": "error",
+                "requested_at": "2026-09-09T10:38:13+00:00",
+            },
+        }
+        self.assertIsNone(
+            pending_meter_sms_clear_deadline(
+                1807.25,
+                "2026-09-09T09:27:50+00:00",
+                last,
+            )
+        )
 
 
 if __name__ == "__main__":

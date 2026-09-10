@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from urllib.parse import quote
@@ -110,3 +110,47 @@ def recent_same_reading_for_sms_retry(
 
     age_seconds = (now - saved_at).total_seconds()
     return 0.0 <= age_seconds <= max(0, int(retry_window_seconds))
+
+
+def pending_meter_sms_clear_deadline(
+    pending_meter_m3: float | None,
+    pending_entered_at: Any,
+    last_manual_reading: Mapping[str, Any] | None,
+    *,
+    retry_window_seconds: int = SMS_RETRY_WINDOW_SECONDS,
+) -> datetime | None:
+    """Odtwórz termin czyszczenia starego pola po SMS zapisanym przez 0.5.0.
+
+    0.5.0 pozostawiał wartość w polu po przygotowaniu SMS i nie zapisywał
+    ``pending_clear_at``. Po aktualizacji wolno automatycznie wyczyścić tylko
+    wartość, którą można jednoznacznie powiązać z ostatnią kotwicą mającą
+    ``composer_requested``. Jeżeli pole zostało ponownie edytowane po tym SMS,
+    jest traktowane jako świeży odczyt i nie jest czyszczone.
+    """
+    if pending_meter_m3 is None or not last_manual_reading:
+        return None
+
+    last_value = last_manual_reading.get(
+        "meter_m3_exact", last_manual_reading.get("meter_m3")
+    )
+    try:
+        if abs(float(last_value) - float(pending_meter_m3)) > 1e-9:
+            return None
+    except (TypeError, ValueError):
+        return None
+
+    sms = last_manual_reading.get("sms")
+    if not isinstance(sms, Mapping) or sms.get("status") != "composer_requested":
+        return None
+
+    requested_at = _parse_aware_iso(sms.get("requested_at"))
+    if requested_at is None:
+        requested_at = _parse_aware_iso(sms.get("prepared_at"))
+    if requested_at is None:
+        return None
+
+    entered_at = _parse_aware_iso(pending_entered_at)
+    if entered_at is not None and entered_at > requested_at:
+        return None
+
+    return requested_at + timedelta(seconds=max(0, int(retry_window_seconds)))
